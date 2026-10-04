@@ -403,6 +403,10 @@
                 <span class="hud-label">BLADES [R]:</span>
                 <span class="hud-value" id="bladesStatus">LOCKED</span>
             </div>
+            <div class="hud-item" id="blastDisplay" style="display: none;">
+                <span class="hud-label">BLAST ROUND:</span>
+                <span class="hud-value" id="blastStatus">-</span>
+            </div>
             <div class="hud-item" id="blackHoleDisplay" style="display: none;">
                 <span class="hud-label">BLACK HOLE [F]:</span>
                 <span class="hud-value" id="blackHoleStatus">LOCKED</span>
@@ -456,9 +460,9 @@
                 <strong style="color: #9966ff;">F - Black Hole Ability (Wave 40+)</strong><br>
                 <strong style="color: #ffe27a;">T - Time Stop (Wave 50+)</strong><br>
                 Boss appears every 10 waves (up to wave 60)<br>
-                <strong style="color: #e9f3f7;">Defeat bosses for ULTIMATE powerups! ★</strong><br>
-                <strong style="color: #ff6666;">Touching a BOSS = INSTANT DEATH!</strong><br>
-                <strong style="color: #ffdd00;">Wave 40+: 50% damage boost!</strong>
+                <strong style="color: #e9f3f7;">Defeat bosses for ULTIMATE powerups</strong><br>
+                <strong style="color: #ff6666;">Touching a BOSS = INSTANT DEATH</strong><br>
+                <strong style="color: #ffdd00;">Wave 40+: 50% damage boost</strong>
             </div>
             <p class="menu-subtitle" style="margin:26px 0 0;font-size:20px">Wave-Based Survival</p>
         </div>
@@ -473,9 +477,10 @@
                 <input type="range" class="vol" id="musicSlider" min="0" max="100" value="50">
                 <div class="settings-row" style="margin-top:26px"><label>SOUNDTRACK</label></div>
                 <div class="track-select">
-                    <button class="track-btn" data-track="0">MIDNIGHT LOFI</button>
-                    <button class="track-btn" data-track="1">SMOKY JAZZ</button>
-                    <button class="track-btn" data-track="2">STELLAR DRIFT</button>
+                    <button class="track-btn" data-track="0">LOFI</button>
+                    <button class="track-btn" data-track="1">JAZZ</button>
+                    <button class="track-btn" data-track="2">STELLAR</button>
+                    <button class="track-btn" data-track="3">SYNC</button>
                 </div>
                 <button class="menu-button" id="settingsBack" style="margin-top:34px">BACK</button>
             </div>
@@ -502,14 +507,14 @@
         
         <!-- Victory Screen -->
         <div id="victoryMenu" class="menu-screen hidden">
-            <h1 class="menu-title" style="color: #66ff66;">VICTORY!</h1>
-            <p class="menu-subtitle">You Saved the Galaxy!</p>
+            <h1 class="menu-title" style="color: #66ff66;">VICTORY</h1>
+            <p class="menu-subtitle">You Saved the Galaxy</p>
             
             <div class="stats">
                 <strong>Final Score:</strong> <span id="victoryScore">0</span>
             </div>
             <div class="stats">
-                <strong>All 60 Waves Completed!</strong>
+                <strong>All 60 Waves Completed</strong>
             </div>
             <div class="stats">
                 <strong>Enemies Destroyed:</strong> <span id="victoryKills">0</span>
@@ -619,6 +624,9 @@
         const KILLS_FOR_BLACKHOLE_RECHARGE = 50;
         let blackHoleAnimations = [];
         
+        // Explosive rounds (unlocked wave 30): every 6th shot detonates for area damage
+        let explosiveUnlocked = false, shotCounter = 0, blastRings = [];
+        
         // Orbital Blades (unlocked wave 30): 6 plasma blades orbit the ship, shred enemies + bullets, chip bosses. No HP cost.
         let bladesUnlocked = false, bladesReady = true, bladesLeft = 0, bladeAngle = 0, killsSinceLastBlades = 0;
         const KILLS_FOR_BLADES = 35, BLADES_DURATION = 10000, BLADE_RADIUS = 95;
@@ -631,6 +639,13 @@
         let godMode = false;
         let stars = [];
         let spawnTimer = null, nextWaveTimer = null, announceTimer = null;
+        function scheduleNextWave(ms) {
+            clearTimeout(nextWaveTimer);
+            nextWaveTimer = setTimeout(() => {
+                if (gameState === 'paused') scheduleNextWave(500);   // still paused: check again shortly, so the wave starts after resuming
+                else if (gameState === 'playing') startWave();
+            }, ms);
+        }
         function clearWaveTimers() { clearInterval(spawnTimer); clearTimeout(nextWaveTimer); }
         
         // ==================== INPUT HANDLING ====================
@@ -946,6 +961,18 @@
                 this.tone({ f0: 1320, dur: 0.38, vol: 0.12, delay: 0.14 });
             },
             
+            playExplosiveShot() {
+                if (!this.context) return;
+                this.tone({ type: 'triangle', f0: 300, f1: 90, dur: 0.22, vol: 0.35, lp: 1200 });
+                this.tone({ f0: 900, f1: 400, dur: 0.12, vol: 0.12 });
+            },
+            
+            playBlast() {
+                if (!this.context || this.throttle('blast', 60)) return;
+                this.tone({ f0: 95, f1: 32, dur: 0.5, vol: 0.8, lp: 260 });
+                this.noise({ f0: 2600, f1: 120, dur: 0.5, vol: 0.45 });
+            },
+            
             playHit() {
                 if (!this.context || this.throttle('hit', 60)) return;
                 this.tone({ f0: 170, f1: 60, dur: 0.18, vol: 0.55, lp: 600 });
@@ -1108,6 +1135,7 @@
             
             shoot() {
                 const bulletSpeed = 10;
+                const explosive = explosiveUnlocked && (++shotCounter % 6 === 0);   // every 6th shot
                 
                 if (this.dualShot) {
                     // Fire two parallel bullets (no spread - shoot straight)
@@ -1142,7 +1170,13 @@
                     ));
                 }
                 
-                AudioManager.playShoot();
+                if (explosive) {
+                    projectiles[projectiles.length - 1].explosive = true;
+                    projectiles[projectiles.length - 1].size = 7;
+                    AudioManager.playExplosiveShot();
+                } else {
+                    AudioManager.playShoot();
+                }
                 
                 // Add muzzle flash particles
                 for (let i = 0; i < 5; i++) {
@@ -1426,9 +1460,12 @@
                 // 50% damage boost after wave 40
                 this.damage = currentWave >= 40 ? 15 : 10;
                 this.alive = true;
+                this.explosive = false;
+                this.trail = [];
             }
             
             update() {
+                if (this.explosive) { this.trail.push({ x: this.x, y: this.y }); if (this.trail.length > 8) this.trail.shift(); }
                 this.x += this.vx;
                 this.y += this.vy;
                 
@@ -1440,6 +1477,20 @@
             }
             
             draw() {
+                if (this.explosive) {   // amber blast round with a fading trail
+                    ctx.save();
+                    this.trail.forEach((q, i) => {
+                        ctx.fillStyle = `rgba(255, 170, 70, ${(i / this.trail.length) * 0.4})`;
+                        ctx.beginPath(); ctx.arc(q.x, q.y, this.size * (i / this.trail.length), 0, Math.PI * 2); ctx.fill();
+                    });
+                    const pr = 1 + Math.sin(Date.now() / 60) * 0.12;
+                    ctx.shadowColor = '#ff9a3c'; ctx.shadowBlur = 18;
+                    const gg = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.size * 1.6 * pr);
+                    gg.addColorStop(0, '#fffbe8'); gg.addColorStop(0.4, '#ffb347'); gg.addColorStop(1, 'rgba(255,120,40,0)');
+                    ctx.fillStyle = gg; ctx.beginPath(); ctx.arc(this.x, this.y, this.size * 1.6 * pr, 0, Math.PI * 2); ctx.fill();
+                    ctx.restore();
+                    return;
+                }
                 ctx.save();
                 
                 // Simple clean bullet - blue color for player
@@ -1604,6 +1655,8 @@
                 this.angle = 0;
                 this.animationFrame = 0;
                 this.bossVariant = bossVariant;
+                // visual theme = the boss that ends this 10-wave band (waves 1-10 -> fortress ... 51-60 -> destroyer)
+                this.theme = Math.min(5, Math.floor((Math.max(1, currentWave) - 1) / 10));
                 
                 // AI behavior properties
                 this.aiTimer = 0;
@@ -2276,956 +2329,282 @@
                 }
             }
             
-            drawSmallEnemy() {
-                // Fast scout - triangular design
+            drawThemed() {
+                const r = this.size, t = this.animationFrame, TAU = Math.PI * 2;
+                const tier = this.type.indexOf('elite') === 0 ? 1 : this.type.indexOf('advanced') === 0 ? 2 : 0;
                 ctx.save();
                 ctx.translate(this.x, this.y);
-                ctx.rotate(this.angle);
                 
-                // Main body - sleek triangle
-                ctx.fillStyle = this.color;
-                ctx.strokeStyle = '#e9f3f7';
-                ctx.lineWidth = 2;
-                ctx.beginPath();
-                ctx.moveTo(this.size, 0);
-                ctx.lineTo(-this.size * 0.8, -this.size * 0.6);
-                ctx.lineTo(-this.size * 0.8, this.size * 0.6);
-                ctx.closePath();
-                ctx.fill();
-                ctx.stroke();
-                
-                // Wing details
-                ctx.fillStyle = '#e9f3f7';
-                ctx.beginPath();
-                ctx.moveTo(this.size * 0.3, 0);
-                ctx.lineTo(-this.size * 0.3, -this.size * 0.3);
-                ctx.lineTo(-this.size * 0.3, this.size * 0.3);
-                ctx.closePath();
-                ctx.fill();
-                
-                // Engine glow
-                ctx.fillStyle = 'rgba(238, 242, 250, 0.6)';
-                ctx.beginPath();
-                ctx.arc(-this.size * 0.8, 0, this.size * 0.3, 0, Math.PI * 2);
-                ctx.fill();
-                
-                ctx.restore();
-            }
-            
-            drawMediumEnemy() {
-                // Balanced fighter - hexagonal design
-                ctx.save();
-                ctx.translate(this.x, this.y);
-                ctx.rotate(this.angle);
-                
-                // Main hexagonal body
-                ctx.fillStyle = this.color;
-                ctx.strokeStyle = '#e9f3f7';
-                ctx.lineWidth = 2;
-                ctx.beginPath();
-                for (let i = 0; i < 6; i++) {
-                    const angle = (Math.PI / 3) * i;
-                    const x = Math.cos(angle) * this.size;
-                    const y = Math.sin(angle) * this.size;
-                    if (i === 0) ctx.moveTo(x, y);
-                    else ctx.lineTo(x, y);
-                }
-                ctx.closePath();
-                ctx.fill();
-                ctx.stroke();
-                
-                // Inner core
-                ctx.fillStyle = '#e9f3f7';
-                ctx.beginPath();
-                ctx.arc(0, 0, this.size * 0.4, 0, Math.PI * 2);
-                ctx.fill();
-                
-                // Side panels
-                ctx.fillStyle = this.color;
-                ctx.fillRect(-this.size * 0.3, -this.size * 0.9, this.size * 0.6, this.size * 0.3);
-                ctx.fillRect(-this.size * 0.3, this.size * 0.6, this.size * 0.6, this.size * 0.3);
-                ctx.strokeRect(-this.size * 0.3, -this.size * 0.9, this.size * 0.6, this.size * 0.3);
-                ctx.strokeRect(-this.size * 0.3, this.size * 0.6, this.size * 0.6, this.size * 0.3);
-                
-                ctx.restore();
-            }
-            
-            drawLargeEnemy() {
-                // Heavy tank - rectangular fortress with ARMOR
-                ctx.save();
-                ctx.translate(this.x, this.y);
-                ctx.rotate(this.angle);
-                
-                // Armor plating effect (since it has armor)
-                ctx.strokeStyle = '#96c1dc';
-                ctx.lineWidth = 4;
-                ctx.strokeRect(-this.size * 1.1, -this.size * 0.9, this.size * 2.2, this.size * 1.8);
-                
-                // Main body
-                ctx.fillStyle = this.color;
-                ctx.strokeStyle = '#e9f3f7';
-                ctx.lineWidth = 3;
-                ctx.fillRect(-this.size, -this.size * 0.8, this.size * 2, this.size * 1.6);
-                ctx.strokeRect(-this.size, -this.size * 0.8, this.size * 2, this.size * 1.6);
-                
-                // Front armor plates
-                ctx.fillStyle = '#e9f3f7';
-                ctx.fillRect(this.size * 0.5, -this.size * 0.6, this.size * 0.5, this.size * 0.4);
-                ctx.fillRect(this.size * 0.5, this.size * 0.2, this.size * 0.5, this.size * 0.4);
-                ctx.strokeRect(this.size * 0.5, -this.size * 0.6, this.size * 0.5, this.size * 0.4);
-                ctx.strokeRect(this.size * 0.5, this.size * 0.2, this.size * 0.5, this.size * 0.4);
-                
-                // Core
-                ctx.fillStyle = this.color;
-                ctx.beginPath();
-                ctx.arc(0, 0, this.size * 0.5, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.stroke();
-                
-                ctx.fillStyle = '#e9f3f7';
-                ctx.beginPath();
-                ctx.arc(0, 0, this.size * 0.25, 0, Math.PI * 2);
-                ctx.fill();
-                
-                // Engine blocks
-                ctx.fillStyle = 'rgba(238, 242, 250, 0.4)';
-                ctx.fillRect(-this.size, -this.size * 0.4, this.size * 0.3, this.size * 0.8);
-                
-                ctx.restore();
-            }
-            
-            drawEliteSmallEnemy() {
-                // Elite scout - enhanced triangular design with energy trails
-                ctx.save();
-                ctx.translate(this.x, this.y);
-                ctx.rotate(this.angle);
-                
-                // Energy trail effect
-                ctx.fillStyle = 'rgba(238, 242, 250, 0.2)';
-                ctx.beginPath();
-                ctx.moveTo(-this.size * 1.2, 0);
-                ctx.lineTo(-this.size * 1.8, -this.size * 0.4);
-                ctx.lineTo(-this.size * 1.8, this.size * 0.4);
-                ctx.closePath();
-                ctx.fill();
-                
-                // Main body - sleek triangle with glow
-                ctx.shadowBlur = 10;
-                ctx.shadowColor = this.color;
-                ctx.fillStyle = this.color;
-                ctx.strokeStyle = '#e9f3f7';
-                ctx.lineWidth = 2.5;
-                ctx.beginPath();
-                ctx.moveTo(this.size * 1.1, 0);
-                ctx.lineTo(-this.size * 0.9, -this.size * 0.7);
-                ctx.lineTo(-this.size * 0.9, this.size * 0.7);
-                ctx.closePath();
-                ctx.fill();
-                ctx.stroke();
-                
-                // Enhanced wing details
-                ctx.shadowBlur = 0;
-                ctx.fillStyle = '#e9f3f7';
-                ctx.beginPath();
-                ctx.moveTo(this.size * 0.4, 0);
-                ctx.lineTo(-this.size * 0.2, -this.size * 0.4);
-                ctx.lineTo(-this.size * 0.2, this.size * 0.4);
-                ctx.closePath();
-                ctx.fill();
-                
-                // Power core
-                ctx.fillStyle = '#83c0e2';
-                ctx.beginPath();
-                ctx.arc(0, 0, this.size * 0.25, 0, Math.PI * 2);
-                ctx.fill();
-                
-                ctx.restore();
-            }
-            
-            drawEliteMediumEnemy() {
-                // Elite fighter - advanced octagonal design
-                ctx.save();
-                ctx.translate(this.x, this.y);
-                ctx.rotate(this.angle);
-                
-                // Outer glow ring
-                ctx.shadowBlur = 12;
-                ctx.shadowColor = this.color;
-                
-                // Main octagonal body (8 sides)
-                ctx.fillStyle = this.color;
-                ctx.strokeStyle = '#e9f3f7';
-                ctx.lineWidth = 2.5;
-                ctx.beginPath();
-                for (let i = 0; i < 8; i++) {
-                    const angle = (Math.PI / 4) * i;
-                    const x = Math.cos(angle) * this.size;
-                    const y = Math.sin(angle) * this.size;
-                    if (i === 0) ctx.moveTo(x, y);
-                    else ctx.lineTo(x, y);
-                }
-                ctx.closePath();
-                ctx.fill();
-                ctx.stroke();
-                
-                // Inner reinforced core
-                ctx.shadowBlur = 0;
-                ctx.fillStyle = '#e9f3f7';
-                ctx.beginPath();
-                for (let i = 0; i < 6; i++) {
-                    const angle = (Math.PI / 3) * i;
-                    const x = Math.cos(angle) * this.size * 0.6;
-                    const y = Math.sin(angle) * this.size * 0.6;
-                    if (i === 0) ctx.moveTo(x, y);
-                    else ctx.lineTo(x, y);
-                }
-                ctx.closePath();
-                ctx.fill();
-                
-                // Power core with cyan glow
-                ctx.fillStyle = '#83c0e2';
-                ctx.beginPath();
-                ctx.arc(0, 0, this.size * 0.3, 0, Math.PI * 2);
-                ctx.fill();
-                
-                // Cannon indicators
-                ctx.fillStyle = '#83c0e2';
-                ctx.fillRect(this.size * 0.7, -this.size * 0.15, this.size * 0.3, this.size * 0.3);
-                
-                ctx.restore();
-            }
-            
-            drawEliteLargeEnemy() {
-                // Elite tank - fortified design with enhanced armor
-                ctx.save();
-                ctx.translate(this.x, this.y);
-                ctx.rotate(this.angle);
-                
-                // Advanced armor plating with glow
-                ctx.shadowBlur = 15;
-                ctx.shadowColor = this.color;
-                ctx.strokeStyle = '#b8d6e6';
-                ctx.lineWidth = 5;
-                ctx.strokeRect(-this.size * 1.15, -this.size * 0.95, this.size * 2.3, this.size * 1.9);
-                
-                // Main fortified body
-                ctx.shadowBlur = 0;
-                ctx.fillStyle = this.color;
-                ctx.strokeStyle = '#e9f3f7';
-                ctx.lineWidth = 3.5;
-                ctx.fillRect(-this.size * 1.05, -this.size * 0.85, this.size * 2.1, this.size * 1.7);
-                ctx.strokeRect(-this.size * 1.05, -this.size * 0.85, this.size * 2.1, this.size * 1.7);
-                
-                // Enhanced front armor plates
-                ctx.fillStyle = '#e9f3f7';
-                ctx.fillRect(this.size * 0.6, -this.size * 0.7, this.size * 0.45, this.size * 0.5);
-                ctx.fillRect(this.size * 0.6, this.size * 0.2, this.size * 0.45, this.size * 0.5);
-                ctx.strokeRect(this.size * 0.6, -this.size * 0.7, this.size * 0.45, this.size * 0.5);
-                ctx.strokeRect(this.size * 0.6, this.size * 0.2, this.size * 0.45, this.size * 0.5);
-                
-                // Power core
-                ctx.fillStyle = this.color;
-                ctx.beginPath();
-                ctx.arc(0, 0, this.size * 0.55, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.stroke();
-                
-                // Cyan energy core
-                ctx.fillStyle = '#83c0e2';
-                ctx.beginPath();
-                ctx.arc(0, 0, this.size * 0.3, 0, Math.PI * 2);
-                ctx.fill();
-                
-                // Advanced engine blocks
-                ctx.fillStyle = 'rgba(131, 192, 226, 0.4)';
-                ctx.fillRect(-this.size * 1.05, -this.size * 0.5, this.size * 0.35, this.size);
-                
-                ctx.restore();
-            }
-            
-            drawAdvancedSmallEnemy() {
-                // Advanced scout - cutting-edge design with plasma trails
-                ctx.save();
-                ctx.translate(this.x, this.y);
-                ctx.rotate(this.angle);
-                
-                // Plasma trail effect
-                const gradient = ctx.createLinearGradient(-this.size * 2, 0, this.size, 0);
-                gradient.addColorStop(0, 'rgba(238, 242, 250, 0)');
-                gradient.addColorStop(1, 'rgba(238, 242, 250, 0.4)');
-                ctx.fillStyle = gradient;
-                ctx.beginPath();
-                ctx.moveTo(-this.size * 1.3, 0);
-                ctx.lineTo(-this.size * 2.2, -this.size * 0.5);
-                ctx.lineTo(-this.size * 2.2, this.size * 0.5);
-                ctx.closePath();
-                ctx.fill();
-                
-                // Main body with intense glow
-                ctx.shadowBlur = 15;
-                ctx.shadowColor = '#e9f3f7';
-                ctx.fillStyle = this.color;
-                ctx.strokeStyle = '#e9f3f7';
-                ctx.lineWidth = 3;
-                ctx.beginPath();
-                ctx.moveTo(this.size * 1.2, 0);
-                ctx.lineTo(-this.size, -this.size * 0.75);
-                ctx.lineTo(-this.size * 0.6, 0);
-                ctx.lineTo(-this.size, this.size * 0.75);
-                ctx.closePath();
-                ctx.fill();
-                ctx.stroke();
-                
-                // Advanced wing structure
-                ctx.shadowBlur = 0;
-                ctx.fillStyle = '#e9f3f7';
-                for (let i = 0; i < 2; i++) {
-                    const ySign = i === 0 ? -1 : 1;
-                    ctx.beginPath();
-                    ctx.moveTo(this.size * 0.5, 0);
-                    ctx.lineTo(-this.size * 0.3, ySign * this.size * 0.5);
-                    ctx.lineTo(0, 0);
+                const body = () => {
+                    const g = ctx.createRadialGradient(-r * 0.35, -r * 0.4, r * 0.05, 0, 0, r * 1.05);
+                    g.addColorStop(0, '#b9dcfa'); g.addColorStop(0.5, '#4d7fc4'); g.addColorStop(1, '#10203f');
+                    return g;
+                };
+                const poly = (n, a, a2, rot) => {
+                    const m = a2 ? n * 2 : n; ctx.beginPath();
+                    for (let i = 0; i < m; i++) {
+                        const an = (rot || 0) + (TAU * i) / m, rr = a2 && i % 2 ? a2 : a;
+                        i ? ctx.lineTo(Math.cos(an) * rr, Math.sin(an) * rr) : ctx.moveTo(Math.cos(an) * rr, Math.sin(an) * rr);
+                    }
                     ctx.closePath();
-                    ctx.fill();
-                }
+                };
+                const rim = (w, c) => { ctx.strokeStyle = c || 'rgba(214, 234, 255, 0.9)'; ctx.lineWidth = w || 1.8; ctx.stroke(); };
                 
-                // Quantum core
-                ctx.fillStyle = '#83c0e2';
-                ctx.beginPath();
-                ctx.arc(0, 0, this.size * 0.3, 0, Math.PI * 2);
-                ctx.fill();
-                
-                // Inner core pulse
-                ctx.fillStyle = '#e9f3f7';
-                ctx.beginPath();
-                ctx.arc(0, 0, this.size * 0.15, 0, Math.PI * 2);
-                ctx.fill();
-                
-                ctx.restore();
-            }
-            
-            drawAdvancedMediumEnemy() {
-                // Advanced fighter - next-gen design with energy shields
+                // ---- body, themed like the boss of this wave band ----
                 ctx.save();
-                ctx.translate(this.x, this.y);
-                ctx.rotate(this.angle);
-                
-                // Energy shield visualization
-                ctx.strokeStyle = 'rgba(131, 192, 226, 0.3)';
-                ctx.lineWidth = 3;
-                ctx.beginPath();
-                ctx.arc(0, 0, this.size * 1.3, 0, Math.PI * 2);
-                ctx.stroke();
-                
-                // Intense glow
-                ctx.shadowBlur = 18;
-                ctx.shadowColor = this.color;
-                
-                // Main decagonal body (10 sides)
-                ctx.fillStyle = this.color;
-                ctx.strokeStyle = '#e9f3f7';
-                ctx.lineWidth = 3;
-                ctx.beginPath();
-                for (let i = 0; i < 10; i++) {
-                    const angle = (Math.PI / 5) * i;
-                    const radius = i % 2 === 0 ? this.size : this.size * 0.9;
-                    const x = Math.cos(angle) * radius;
-                    const y = Math.sin(angle) * radius;
-                    if (i === 0) ctx.moveTo(x, y);
-                    else ctx.lineTo(x, y);
+                switch (this.theme) {
+                    case 0:   // fortress: spiked octagon
+                        ctx.rotate(t * 0.5); poly(8, r, r * 0.8, 0); ctx.fillStyle = body(); ctx.fill(); rim();
+                        ctx.beginPath(); ctx.arc(0, 0, r * 0.45, 0, TAU); ctx.fillStyle = '#122246'; ctx.fill(); break;
+                    case 1:   // rotor: hub with spinning blades
+                        ctx.rotate(t * 2.2);
+                        for (let i = 0; i < 4; i++) {
+                            ctx.save(); ctx.rotate((TAU * i) / 4);
+                            const bg = ctx.createLinearGradient(r * 0.3, 0, r * 1.05, 0); bg.addColorStop(0, '#1b3463'); bg.addColorStop(1, '#d9edff');
+                            ctx.fillStyle = bg; ctx.beginPath(); ctx.moveTo(r * 0.3, 0);
+                            ctx.quadraticCurveTo(r * 0.75, -r * 0.45, r * 1.05, -r * 0.05); ctx.lineTo(r * 0.85, r * 0.18); ctx.closePath(); ctx.fill();
+                            ctx.restore();
+                        }
+                        ctx.beginPath(); ctx.arc(0, 0, r * 0.5, 0, TAU); ctx.fillStyle = body(); ctx.fill(); rim(); break;
+                    case 2: { // crystal: faceted hexagon, counter-rotating inner shard
+                        ctx.rotate(t * 0.4); poly(6, r, 0, 0);
+                        const cg = ctx.createLinearGradient(-r, -r, r, r); cg.addColorStop(0, 'rgba(195, 228, 255, 0.85)'); cg.addColorStop(1, 'rgba(45, 90, 170, 0.9)');
+                        ctx.fillStyle = cg; ctx.fill(); rim();
+                        ctx.strokeStyle = 'rgba(255,255,255,.3)'; ctx.lineWidth = 1;
+                        for (let i = 0; i < 3; i++) { const an = (Math.PI * i) / 3; ctx.beginPath(); ctx.moveTo(Math.cos(an) * r, Math.sin(an) * r); ctx.lineTo(-Math.cos(an) * r, -Math.sin(an) * r); ctx.stroke(); }
+                        ctx.rotate(-t * 0.9); poly(6, r * 0.45, 0, 0); ctx.fillStyle = 'rgba(15, 35, 80, 0.7)'; ctx.fill(); break;
+                    }
+                    case 3: { // bio-mech: round body with short writhing tentacles and an eye
+                        ctx.lineCap = 'round';
+                        for (let i = 0; i < 5; i++) {
+                            const an = (TAU * i) / 5 + t * 0.3; let px = 0, py = 0;
+                            for (let k = 0; k < 4; k++) {
+                                const u = (k + 1) / 4, wob = Math.sin(t * 3 + u * 4 + i) * r * 0.25 * u;
+                                const nx = Math.cos(an) * r * 1.3 * u - Math.sin(an) * wob, ny = Math.sin(an) * r * 1.3 * u + Math.cos(an) * wob;
+                                ctx.strokeStyle = '#7fb4ee'; ctx.lineWidth = Math.max(1.2, r * 0.22 * (1 - u));
+                                ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(nx, ny); ctx.stroke(); px = nx; py = ny;
+                            }
+                        }
+                        ctx.beginPath(); ctx.ellipse(0, 0, r * 0.92, r * 0.78, 0, 0, TAU); ctx.fillStyle = body(); ctx.fill(); rim(); break;
+                    }
+                    case 4:   // matrix: two counter-rotating squares
+                        ctx.shadowColor = '#8fd0ff'; ctx.shadowBlur = 6;
+                        ctx.save(); ctx.rotate(t); ctx.fillStyle = 'rgba(30, 70, 140, 0.35)'; ctx.fillRect(-r * 0.85, -r * 0.85, r * 1.7, r * 1.7); rim(2); ctx.strokeRect(-r * 0.85, -r * 0.85, r * 1.7, r * 1.7); ctx.restore();
+                        ctx.save(); ctx.rotate(-t * 1.4); ctx.strokeStyle = 'rgba(190, 225, 255, 0.8)'; ctx.lineWidth = 1.6; ctx.strokeRect(-r * 0.55, -r * 0.55, r * 1.1, r * 1.1); ctx.restore();
+                        break;
+                    default:  // destroyer: gear with dark ring
+                        ctx.rotate(t * 0.3); poly(12, r * 1.08, r * 0.86, 0); ctx.fillStyle = body(); ctx.fill(); rim();
+                        ctx.beginPath(); ctx.arc(0, 0, r * 0.55, 0, TAU); ctx.fillStyle = '#0d1a38'; ctx.fill(); rim(1.4, 'rgba(160,215,255,.7)');
                 }
-                ctx.closePath();
-                ctx.fill();
-                ctx.stroke();
-                
-                // Advanced core structure
-                ctx.shadowBlur = 0;
-                ctx.fillStyle = '#e9f3f7';
-                ctx.beginPath();
-                for (let i = 0; i < 8; i++) {
-                    const angle = (Math.PI / 4) * i;
-                    const x = Math.cos(angle) * this.size * 0.65;
-                    const y = Math.sin(angle) * this.size * 0.65;
-                    if (i === 0) ctx.moveTo(x, y);
-                    else ctx.lineTo(x, y);
-                }
-                ctx.closePath();
-                ctx.fill();
-                
-                // Quantum power core
-                ctx.fillStyle = '#83c0e2';
-                ctx.beginPath();
-                ctx.arc(0, 0, this.size * 0.35, 0, Math.PI * 2);
-                ctx.fill();
-                
-                // Pulse center
-                ctx.fillStyle = '#e9f3f7';
-                ctx.beginPath();
-                ctx.arc(0, 0, this.size * 0.18, 0, Math.PI * 2);
-                ctx.fill();
-                
-                // Advanced weapon systems
-                ctx.fillStyle = '#83c0e2';
-                ctx.fillRect(this.size * 0.75, -this.size * 0.2, this.size * 0.35, this.size * 0.4);
-                ctx.strokeStyle = '#e9f3f7';
-                ctx.strokeRect(this.size * 0.75, -this.size * 0.2, this.size * 0.35, this.size * 0.4);
-                
                 ctx.restore();
-            }
-            
-            drawAdvancedLargeEnemy() {
-                // Advanced battleship - ultimate fortress design
-                ctx.save();
-                ctx.translate(this.x, this.y);
-                ctx.rotate(this.angle);
                 
-                // Ultimate armor plating with energy field
-                ctx.shadowBlur = 20;
-                ctx.shadowColor = '#83c0e2';
-                ctx.strokeStyle = '#c8e0ec';
-                ctx.lineWidth = 6;
-                ctx.strokeRect(-this.size * 1.2, -this.size, this.size * 2.4, this.size * 2);
-                
-                // Secondary armor layer
-                ctx.strokeStyle = 'rgba(131, 192, 226, 0.4)';
-                ctx.lineWidth = 4;
-                ctx.strokeRect(-this.size * 1.25, -this.size * 1.05, this.size * 2.5, this.size * 2.1);
-                
-                // Main battleship body
-                ctx.shadowBlur = 0;
-                ctx.fillStyle = this.color;
-                ctx.strokeStyle = '#e9f3f7';
-                ctx.lineWidth = 4;
-                ctx.fillRect(-this.size * 1.1, -this.size * 0.9, this.size * 2.2, this.size * 1.8);
-                ctx.strokeRect(-this.size * 1.1, -this.size * 0.9, this.size * 2.2, this.size * 1.8);
-                
-                // Advanced armor plates with details
-                ctx.fillStyle = '#e9f3f7';
-                for (let i = 0; i < 3; i++) {
-                    const yOffset = -this.size * 0.6 + i * this.size * 0.6;
-                    ctx.fillRect(this.size * 0.65, yOffset, this.size * 0.45, this.size * 0.4);
-                    ctx.strokeRect(this.size * 0.65, yOffset, this.size * 0.45, this.size * 0.4);
+                // ---- tier rings: elite = one thin ring, advanced = a ring plus a rotating dashed ring ----
+                if (tier) {
+                    ctx.strokeStyle = 'rgba(190, 225, 255, 0.55)'; ctx.lineWidth = 1.4;
+                    ctx.beginPath(); ctx.arc(0, 0, r * 1.22, 0, TAU); ctx.stroke();
+                    if (tier === 2) {
+                        ctx.save(); ctx.rotate(t * 1.5); ctx.setLineDash([5, 6]); ctx.beginPath(); ctx.arc(0, 0, r * 1.4, 0, TAU); ctx.stroke(); ctx.restore();
+                    }
                 }
                 
-                // Command core
-                ctx.fillStyle = this.color;
-                ctx.beginPath();
-                ctx.arc(0, 0, this.size * 0.6, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.stroke();
-                
-                // Quantum reactor core
-                ctx.fillStyle = '#83c0e2';
-                ctx.beginPath();
-                ctx.arc(0, 0, this.size * 0.4, 0, Math.PI * 2);
-                ctx.fill();
-                
-                // Inner reactor
-                ctx.fillStyle = '#e9f3f7';
-                ctx.beginPath();
-                ctx.arc(0, 0, this.size * 0.22, 0, Math.PI * 2);
-                ctx.fill();
-                
-                // Plasma engine blocks
-                const plasmaGradient = ctx.createLinearGradient(-this.size * 1.1, 0, -this.size * 0.7, 0);
-                plasmaGradient.addColorStop(0, 'rgba(131, 192, 226, 0.6)');
-                plasmaGradient.addColorStop(1, 'rgba(131, 192, 226, 0.6)');
-                ctx.fillStyle = plasmaGradient;
-                ctx.fillRect(-this.size * 1.1, -this.size * 0.6, this.size * 0.4, this.size * 1.2);
-                
+                // ---- behaviour marks, drawn facing the player so each special type stays readable ----
+                ctx.save(); ctx.rotate(this.angle); ctx.fillStyle = '#e4f3ff'; ctx.strokeStyle = '#e4f3ff';
+                switch (this.type) {
+                    case 'shooter': ctx.fillRect(r * 0.75, -2, r * 0.55, 4); break;
+                    case 'burst': [-0.55, 0, 0.55].forEach(an => { ctx.save(); ctx.rotate(an); ctx.fillRect(r * 0.85, -1.6, r * 0.4, 3.2); ctx.restore(); }); break;
+                    case 'rapid': ctx.fillRect(r * 0.75, -r * 0.4, r * 0.5, 2.6); ctx.fillRect(r * 0.75, r * 0.4 - 2.6, r * 0.5, 2.6); break;
+                    case 'spiral':
+                        for (let i = 0; i < 3; i++) { const an = t * 2.5 + (TAU * i) / 3; ctx.beginPath(); ctx.arc(Math.cos(an) * r * 1.3, Math.sin(an) * r * 1.3, 2.6, 0, TAU); ctx.fill(); } break;
+                    case 'splitter': ctx.lineWidth = 2; ctx.strokeStyle = '#0b1530'; ctx.beginPath(); ctx.moveTo(0, -r); ctx.lineTo(0, r); ctx.stroke(); break;
+                    case 'exploder': {
+                        const k = 1 + Math.sin(t * 6) * 0.12; ctx.lineWidth = 1.6; ctx.setLineDash([4, 5]);
+                        ctx.beginPath(); ctx.arc(0, 0, r * 1.3 * k, 0, TAU); ctx.stroke(); break;
+                    }
+                    case 'mini-bomber': for (let i = 0; i < 3; i++) { const an = (TAU * i) / 3 + Math.PI / 2; ctx.beginPath(); ctx.arc(Math.cos(an) * r * 0.9, Math.sin(an) * r * 0.9, 2, 0, TAU); ctx.fill(); } break;
+                }
                 ctx.restore();
-            }
-            
-            drawExploderEnemy() {
-                // Explosive enemy - spiky circular design
-                ctx.save();
-                ctx.translate(this.x, this.y);
                 
-                // Pulsing animation
-                const pulse = 1 + Math.sin(this.animationFrame * 5) * 0.15;
-                ctx.scale(pulse, pulse);
-                
-                // Main circular body
-                ctx.fillStyle = this.color;
-                ctx.strokeStyle = '#83c0e2';
-                ctx.lineWidth = 2;
-                ctx.beginPath();
-                ctx.arc(0, 0, this.size, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.stroke();
-                
-                // Spiky protrusions (warning of explosion)
-                ctx.fillStyle = '#83c0e2';
-                for (let i = 0; i < 8; i++) {
-                    const angle = (Math.PI * 2 * i) / 8;
-                    ctx.save();
-                    ctx.rotate(angle);
-                    ctx.beginPath();
-                    ctx.moveTo(this.size * 0.6, 0);
-                    ctx.lineTo(this.size * 1.2, -this.size * 0.2);
-                    ctx.lineTo(this.size * 1.2, this.size * 0.2);
-                    ctx.closePath();
-                    ctx.fill();
-                    ctx.restore();
-                }
-                
-                // Warning core
-                ctx.fillStyle = '#e9f3f7';
-                ctx.beginPath();
-                ctx.arc(0, 0, this.size * 0.4, 0, Math.PI * 2);
-                ctx.fill();
-                
-                // Danger symbol (!)
-                ctx.fillStyle = '#51a6d6';
-                ctx.font = 'bold 12px Arial';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.fillText('!', 0, 0);
-                
-                ctx.restore();
-            }
-            
-            drawMiniBomberEnemy() {
-                // Mini-bomber - smaller explosive enemy with fewer spikes
-                ctx.save();
-                ctx.translate(this.x, this.y);
-                
-                // Faster pulsing animation
-                const pulse = 1 + Math.sin(this.animationFrame * 6) * 0.2;
-                ctx.scale(pulse, pulse);
-                
-                // Main circular body
-                ctx.fillStyle = this.color;
-                ctx.strokeStyle = '#9fcee8';
-                ctx.lineWidth = 1.5;
-                ctx.beginPath();
-                ctx.arc(0, 0, this.size, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.stroke();
-                
-                // Fewer spiky protrusions (4 instead of 8)
-                ctx.fillStyle = '#9fcee8';
-                for (let i = 0; i < 4; i++) {
-                    const angle = (Math.PI * 2 * i) / 4;
-                    ctx.save();
-                    ctx.rotate(angle);
-                    ctx.beginPath();
-                    ctx.moveTo(this.size * 0.5, 0);
-                    ctx.lineTo(this.size * 1.1, -this.size * 0.15);
-                    ctx.lineTo(this.size * 1.1, this.size * 0.15);
-                    ctx.closePath();
-                    ctx.fill();
-                    ctx.restore();
-                }
-                
-                // Warning core
-                ctx.fillStyle = '#e9f3f7';
-                ctx.beginPath();
-                ctx.arc(0, 0, this.size * 0.35, 0, Math.PI * 2);
-                ctx.fill();
-                
-                // Small warning dot
-                ctx.fillStyle = '#68b2db';
-                ctx.beginPath();
-                ctx.arc(0, 0, this.size * 0.15, 0, Math.PI * 2);
-                ctx.fill();
-                
-                ctx.restore();
-            }
-            
-            drawShooterEnemy() {
-                // Ranged attacker - diamond with cannons
-                ctx.save();
-                ctx.translate(this.x, this.y);
-                ctx.rotate(this.angle);
-                
-                // Main diamond body
-                ctx.fillStyle = this.color;
-                ctx.strokeStyle = '#e9f3f7';
-                ctx.lineWidth = 2;
-                ctx.beginPath();
-                ctx.moveTo(this.size, 0);
-                ctx.lineTo(0, -this.size * 0.8);
-                ctx.lineTo(-this.size, 0);
-                ctx.lineTo(0, this.size * 0.8);
-                ctx.closePath();
-                ctx.fill();
-                ctx.stroke();
-                
-                // Gun barrels on sides
-                ctx.fillStyle = '#e9f3f7';
-                ctx.fillRect(-this.size * 0.7, -this.size * 0.9, this.size * 0.4, this.size * 0.3);
-                ctx.fillRect(-this.size * 0.7, this.size * 0.6, this.size * 0.4, this.size * 0.3);
-                ctx.strokeRect(-this.size * 0.7, -this.size * 0.9, this.size * 0.4, this.size * 0.3);
-                ctx.strokeRect(-this.size * 0.7, this.size * 0.6, this.size * 0.4, this.size * 0.3);
-                
-                // Core targeting system
-                ctx.fillStyle = '#e9f3f7';
-                ctx.beginPath();
-                ctx.arc(0, 0, this.size * 0.3, 0, Math.PI * 2);
-                ctx.fill();
-                
-                // Targeting crosshair
-                ctx.strokeStyle = this.color;
-                ctx.lineWidth = 2;
-                ctx.beginPath();
-                ctx.moveTo(-this.size * 0.2, 0);
-                ctx.lineTo(this.size * 0.2, 0);
-                ctx.moveTo(0, -this.size * 0.2);
-                ctx.lineTo(0, this.size * 0.2);
-                ctx.stroke();
-                
-                ctx.restore();
-            }
-            
-            drawBurstEnemy() {
-                // Triple-barrel attacker
-                ctx.save();
-                ctx.translate(this.x, this.y);
-                ctx.rotate(this.angle);
-                
-                // Main triangular body
-                ctx.fillStyle = this.color;
-                ctx.strokeStyle = '#e9f3f7';
-                ctx.lineWidth = 2;
-                ctx.beginPath();
-                ctx.moveTo(this.size, 0);
-                ctx.lineTo(-this.size * 0.6, -this.size * 0.9);
-                ctx.lineTo(-this.size * 0.6, this.size * 0.9);
-                ctx.closePath();
-                ctx.fill();
-                ctx.stroke();
-                
-                // Three barrel guns
-                ctx.fillStyle = '#e9f3f7';
-                for (let i = -1; i <= 1; i++) {
-                    const yOffset = i * this.size * 0.4;
-                    ctx.fillRect(this.size * 0.3, yOffset - 3, this.size * 0.4, 6);
-                    ctx.strokeRect(this.size * 0.3, yOffset - 3, this.size * 0.4, 6);
-                }
-                
-                ctx.restore();
-            }
-            
-            drawSpiralEnemy() {
-                // Rotating spinner
-                ctx.save();
-                ctx.translate(this.x, this.y);
-                
-                // Main circular body
-                ctx.fillStyle = this.color;
-                ctx.strokeStyle = '#e9f3f7';
-                ctx.lineWidth = 2;
-                ctx.beginPath();
-                ctx.arc(0, 0, this.size, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.stroke();
-                
-                // Rotating spiral arms
-                ctx.rotate(this.animationFrame * 3);
-                ctx.fillStyle = '#e9f3f7';
-                for (let i = 0; i < 4; i++) {
-                    ctx.save();
-                    ctx.rotate((Math.PI * 2 * i) / 4);
-                    ctx.beginPath();
-                    ctx.arc(this.size * 0.6, 0, 4, 0, Math.PI * 2);
-                    ctx.fill();
-                    ctx.restore();
-                }
-                
-                ctx.restore();
-            }
-            
-            drawRapidEnemy() {
-                // High fire rate - multiple barrels
-                ctx.save();
-                ctx.translate(this.x, this.y);
-                ctx.rotate(this.angle);
-                
-                // Compact hexagonal body
-                ctx.fillStyle = this.color;
-                ctx.strokeStyle = '#e9f3f7';
-                ctx.lineWidth = 2;
-                ctx.beginPath();
-                for (let i = 0; i < 6; i++) {
-                    const angle = (Math.PI / 3) * i;
-                    const x = Math.cos(angle) * this.size * 0.7;
-                    const y = Math.sin(angle) * this.size * 0.7;
-                    if (i === 0) ctx.moveTo(x, y);
-                    else ctx.lineTo(x, y);
-                }
-                ctx.closePath();
-                ctx.fill();
-                ctx.stroke();
-                
-                // Rapid fire barrels
-                ctx.fillStyle = '#e9f3f7';
-                ctx.fillRect(this.size * 0.2, -4, this.size * 0.6, 3);
-                ctx.fillRect(this.size * 0.2, 1, this.size * 0.6, 3);
-                ctx.strokeRect(this.size * 0.2, -4, this.size * 0.6, 3);
-                ctx.strokeRect(this.size * 0.2, 1, this.size * 0.6, 3);
-                
-                ctx.restore();
-            }
-            
-            drawSplitterEnemy() {
-                // Splits bullets - crystal design
-                ctx.save();
-                ctx.translate(this.x, this.y);
-                ctx.rotate(this.angle);
-                
-                // Crystalline octagonal body
-                ctx.fillStyle = this.color;
-                ctx.strokeStyle = '#e9f3f7';
-                ctx.lineWidth = 2;
-                ctx.beginPath();
-                for (let i = 0; i < 8; i++) {
-                    const angle = (Math.PI * 2 * i) / 8 + Math.PI / 8;
-                    const radius = i % 2 === 0 ? this.size : this.size * 0.8;
-                    const x = Math.cos(angle) * radius;
-                    const y = Math.sin(angle) * radius;
-                    if (i === 0) ctx.moveTo(x, y);
-                    else ctx.lineTo(x, y);
-                }
-                ctx.closePath();
-                ctx.fill();
-                ctx.stroke();
-                
-                // Inner crystal
-                ctx.fillStyle = '#e9f3f7';
-                ctx.beginPath();
-                for (let i = 0; i < 4; i++) {
-                    const angle = (Math.PI * 2 * i) / 4;
-                    const x = Math.cos(angle) * this.size * 0.4;
-                    const y = Math.sin(angle) * this.size * 0.4;
-                    if (i === 0) ctx.moveTo(x, y);
-                    else ctx.lineTo(x, y);
-                }
-                ctx.closePath();
-                ctx.fill();
+                // ---- glowing core ----
+                ctx.save(); ctx.shadowColor = '#9fd8ff'; ctx.shadowBlur = 10;
+                const k2 = 1 + Math.sin(t * 4) * 0.15, cg2 = ctx.createRadialGradient(0, 0, 0, 0, 0, r * 0.32 * k2);
+                cg2.addColorStop(0, '#ffffff'); cg2.addColorStop(0.5, '#a9dcff'); cg2.addColorStop(1, 'rgba(100, 180, 240, 0)');
+                ctx.fillStyle = cg2; ctx.beginPath(); ctx.arc(0, 0, r * 0.32 * k2, 0, TAU); ctx.fill(); ctx.restore();
                 
                 ctx.restore();
             }
             
             drawBoss() {
+                const S = this.size, t = this.animationFrame, P = this.pulsePhase, TAU = Math.PI * 2;
                 ctx.save();
                 ctx.translate(this.x, this.y);
                 
-                const pulse = 1 + Math.sin(this.pulsePhase) * 0.1;
-                ctx.scale(pulse, pulse);
+                // soft aura behind the boss
+                let g = ctx.createRadialGradient(0, 0, S * 0.6, 0, 0, S * 1.9);
+                g.addColorStop(0, 'rgba(120, 190, 255, 0.30)'); g.addColorStop(1, 'rgba(120, 190, 255, 0)');
+                ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, S * 1.9, 0, TAU); ctx.fill();
                 
-                switch(this.bossVariant) {
-                    case 0: // Wave 10 - Octagonal Fortress
-                        ctx.rotate(this.animationFrame);
-                        ctx.fillStyle = this.color;
-                        ctx.strokeStyle = '#e9f3f7';
-                        ctx.lineWidth = 3;
-                        ctx.beginPath();
-                        for (let i = 0; i < 8; i++) {
-                            const angle = (Math.PI * 2 * i) / 8;
-                            const radius = i % 2 === 0 ? this.size : this.size * 0.7;
-                            const x = Math.cos(angle) * radius;
-                            const y = Math.sin(angle) * radius;
-                            if (i === 0) ctx.moveTo(x, y);
-                            else ctx.lineTo(x, y);
-                        }
-                        ctx.closePath();
-                        ctx.fill();
-                        ctx.stroke();
-                        
-                        ctx.fillStyle = '#74a9d3';
-                        ctx.beginPath();
-                        ctx.arc(0, 0, this.size * 0.3, 0, Math.PI * 2);
-                        ctx.fill();
-                        
-                        ctx.fillStyle = '#e9f3f7';
-                        ctx.fillRect(-12, -6, 10, 10);
-                        ctx.fillRect(2, -6, 10, 10);
+                const pulse = 1 + Math.sin(P) * 0.05; ctx.scale(pulse, pulse);
+                
+                // helpers: metallic gradient, polygon / star path, rim light, glowing core, ring of lights
+                const body = (r) => {
+                    const gr = ctx.createRadialGradient(-r * 0.35, -r * 0.4, r * 0.05, 0, 0, r * 1.05);
+                    gr.addColorStop(0, '#b9dcfa'); gr.addColorStop(0.45, '#4d7fc4'); gr.addColorStop(1, '#0e1c3a');
+                    return gr;
+                };
+                const poly = (n, r, r2, rot) => {
+                    const m = r2 ? n * 2 : n; ctx.beginPath();
+                    for (let i = 0; i < m; i++) {
+                        const an = (rot || 0) + (TAU * i) / m, rr = r2 && i % 2 ? r2 : r;
+                        i ? ctx.lineTo(Math.cos(an) * rr, Math.sin(an) * rr) : ctx.moveTo(Math.cos(an) * rr, Math.sin(an) * rr);
+                    }
+                    ctx.closePath();
+                };
+                const rim = (w, c) => { ctx.strokeStyle = c || 'rgba(214, 234, 255, 0.9)'; ctx.lineWidth = w || 2.5; ctx.stroke(); };
+                const core = (r, c) => {
+                    ctx.save(); ctx.shadowColor = c; ctx.shadowBlur = 26;
+                    const k = 1 + Math.sin(P * 2) * 0.15, cg = ctx.createRadialGradient(0, 0, 0, 0, 0, r * k);
+                    cg.addColorStop(0, '#ffffff'); cg.addColorStop(0.45, c); cg.addColorStop(1, 'rgba(80, 160, 230, 0)');
+                    ctx.fillStyle = cg; ctx.beginPath(); ctx.arc(0, 0, r * k, 0, TAU); ctx.fill(); ctx.restore();
+                };
+                const lights = (n, rad, sz, rot, col) => {
+                    ctx.save(); ctx.fillStyle = col; ctx.shadowColor = col; ctx.shadowBlur = 8;
+                    for (let i = 0; i < n; i++) {
+                        const an = rot + (TAU * i) / n, on = 0.6 + 0.4 * Math.sin(P * 2 + i);
+                        ctx.globalAlpha = on; ctx.beginPath(); ctx.arc(Math.cos(an) * rad, Math.sin(an) * rad, sz, 0, TAU); ctx.fill();
+                    }
+                    ctx.restore();
+                };
+                
+                switch (this.bossVariant) {
+                    case 0: { // Wave 10 - Armored Fortress
+                        ctx.save(); ctx.rotate(t * 0.5);
+                        poly(8, S, S * 0.78, 0); ctx.fillStyle = body(S); ctx.fill(); rim(3);
+                        poly(8, S * 0.6, 0, Math.PI / 8); ctx.fillStyle = '#122246'; ctx.fill(); rim(2, 'rgba(160,210,255,.7)');
+                        ctx.restore();
+                        lights(8, S * 0.86, 3.5, t * 0.5, '#d4ecff');
+                        ctx.save(); ctx.rotate(-t);
+                        poly(4, S * 0.42, S * 0.2, 0); ctx.fillStyle = body(S * 0.4); ctx.fill(); rim(2);
+                        ctx.restore();
+                        core(S * 0.28, '#8fd0ff');
                         break;
-                        
-                    case 1: // Wave 20 - Spinning Blades
-                        ctx.fillStyle = this.color;
-                        ctx.strokeStyle = '#e9f3f7';
-                        ctx.lineWidth = 3;
-                        
-                        ctx.beginPath();
-                        ctx.arc(0, 0, this.size * 0.4, 0, Math.PI * 2);
-                        ctx.fill();
-                        ctx.stroke();
-                        
-                        ctx.rotate(this.animationFrame * 2);
+                    }
+                    case 1: { // Wave 20 - Razor Rotor
+                        ctx.strokeStyle = 'rgba(160, 210, 255, 0.25)'; ctx.lineWidth = 2; ctx.setLineDash([6, 8]);
+                        ctx.beginPath(); ctx.arc(0, 0, S * 1.02, 0, TAU); ctx.stroke(); ctx.setLineDash([]);
+                        ctx.save(); ctx.rotate(t * 2.2);
                         for (let i = 0; i < 6; i++) {
-                            ctx.save();
-                            ctx.rotate((Math.PI * 2 * i) / 6);
-                            ctx.fillStyle = '#4081c6';
-                            ctx.beginPath();
-                            ctx.moveTo(this.size * 0.2, 0);
-                            ctx.lineTo(this.size * 0.9, -this.size * 0.15);
-                            ctx.lineTo(this.size * 0.9, this.size * 0.15);
-                            ctx.closePath();
-                            ctx.fill();
-                            ctx.stroke();
+                            ctx.save(); ctx.rotate((TAU * i) / 6);
+                            const bg = ctx.createLinearGradient(S * 0.3, 0, S, 0);
+                            bg.addColorStop(0, '#1b3463'); bg.addColorStop(1, '#d9edff');
+                            ctx.fillStyle = bg;
+                            ctx.beginPath(); ctx.moveTo(S * 0.3, 0);
+                            ctx.quadraticCurveTo(S * 0.75, -S * 0.42, S * 1.02, -S * 0.04);
+                            ctx.lineTo(S * 0.88, S * 0.13); ctx.quadraticCurveTo(S * 0.6, S * 0.1, S * 0.3, S * 0.14);
+                            ctx.closePath(); ctx.fill(); rim(1.5, 'rgba(220,240,255,.8)');
                             ctx.restore();
                         }
-                        
-                        ctx.rotate(-this.animationFrame * 2);
-                        ctx.fillStyle = '#e9f3f7';
-                        ctx.beginPath();
-                        ctx.arc(0, 0, this.size * 0.15, 0, Math.PI * 2);
-                        ctx.fill();
+                        ctx.restore();
+                        ctx.beginPath(); ctx.arc(0, 0, S * 0.42, 0, TAU); ctx.fillStyle = body(S * 0.42); ctx.fill(); rim(3);
+                        ctx.beginPath(); ctx.arc(0, 0, S * 0.3, 0, TAU); rim(1.5, 'rgba(160,210,255,.6)');
+                        core(S * 0.2, '#a9dcff');
                         break;
-                        
-                    case 2: // Wave 30 - Crystalline Form
-                        ctx.rotate(this.animationFrame * 0.5);
-                        ctx.fillStyle = this.color;
-                        ctx.strokeStyle = '#e9f3f7';
-                        ctx.lineWidth = 2;
-                        
+                    }
+                    case 2: { // Wave 30 - Crystal Sovereign
                         for (let ring = 0; ring < 3; ring++) {
-                            const ringSize = this.size * (1 - ring * 0.25);
-                            const points = 6 + ring;
-                            ctx.rotate((Math.PI * 2) / points / 2);
-                            ctx.beginPath();
-                            for (let i = 0; i < points; i++) {
-                                const angle = (Math.PI * 2 * i) / points;
-                                const x = Math.cos(angle) * ringSize;
-                                const y = Math.sin(angle) * ringSize;
-                                if (i === 0) ctx.moveTo(x, y);
-                                else ctx.lineTo(x, y);
-                            }
-                            ctx.closePath();
-                            ctx.fill();
-                            ctx.stroke();
+                            ctx.save(); ctx.rotate((ring % 2 ? -1 : 1) * t * (0.35 + ring * 0.15));
+                            const rs = S * (1 - ring * 0.26), pts = 6 + ring;
+                            poly(pts, rs, 0, 0);
+                            const cg = ctx.createLinearGradient(-rs, -rs, rs, rs);
+                            cg.addColorStop(0, `rgba(190, 225, 255, ${0.55 + ring * 0.12})`); cg.addColorStop(1, `rgba(45, 90, 170, ${0.85})`);
+                            ctx.fillStyle = cg; ctx.fill(); rim(2);
+                            ctx.strokeStyle = 'rgba(255,255,255,.28)'; ctx.lineWidth = 1;
+                            for (let i = 0; i < pts; i++) { const an = (TAU * i) / pts; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.cos(an) * rs, Math.sin(an) * rs); ctx.stroke(); }
+                            ctx.restore();
                         }
-                        
-                        ctx.fillStyle = '#e9f3f7';
-                        ctx.beginPath();
-                        for (let i = 0; i < 4; i++) {
-                            const angle = (Math.PI * 2 * i) / 4 + Math.PI / 4;
-                            const x = Math.cos(angle) * this.size * 0.2;
-                            const y = Math.sin(angle) * this.size * 0.2;
-                            if (i === 0) ctx.moveTo(x, y);
-                            else ctx.lineTo(x, y);
+                        ctx.save(); ctx.fillStyle = '#dff0ff'; ctx.shadowColor = '#8fd0ff'; ctx.shadowBlur = 10;
+                        for (let i = 0; i < 6; i++) {   // orbiting shards
+                            const an = t * 1.2 + (TAU * i) / 6, sx = Math.cos(an) * S * 1.2, sy = Math.sin(an) * S * 1.2;
+                            ctx.save(); ctx.translate(sx, sy); ctx.rotate(an * 2);
+                            ctx.beginPath(); ctx.moveTo(0, -8); ctx.lineTo(4, 0); ctx.lineTo(0, 8); ctx.lineTo(-4, 0); ctx.closePath(); ctx.fill(); ctx.restore();
                         }
-                        ctx.closePath();
-                        ctx.fill();
+                        ctx.restore();
+                        core(S * 0.24, '#b4e0ff');
                         break;
-                        
-                    case 3: // Wave 40 - Bio-Mechanical Horror
-                        ctx.fillStyle = this.color;
-                        ctx.strokeStyle = '#74a9d3';
-                        ctx.lineWidth = 2;
-                        
+                    }
+                    case 3: { // Wave 40 - Bio-Mechanical Horror
+                        ctx.save(); ctx.lineCap = 'round'; ctx.shadowColor = '#6fa8e8'; ctx.shadowBlur = 8;
+                        for (let i = 0; i < 8; i++) {   // tapering, writhing tentacles
+                            const an = (TAU * i) / 8; let px = 0, py = 0;
+                            for (let k = 0; k < 10; k++) {
+                                const u = (k + 1) / 10, wob = Math.sin(t * 3 + u * 5 + i) * 11 * u;
+                                const nx = Math.cos(an) * S * 1.15 * u - Math.sin(an) * wob, ny = Math.sin(an) * S * 1.15 * u + Math.cos(an) * wob;
+                                ctx.strokeStyle = `rgba(${110 + k * 12}, ${165 + k * 8}, 235, 0.95)`; ctx.lineWidth = 9 * (1 - u) + 1.5;
+                                ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(nx, ny); ctx.stroke(); px = nx; py = ny;
+                            }
+                        }
+                        ctx.restore();
                         for (let seg = 0; seg < 3; seg++) {
-                            const segSize = this.size * (0.9 - seg * 0.2);
-                            const offset = Math.sin(this.animationFrame * 2 + seg) * 5;
-                            ctx.save();
-                            ctx.translate(0, offset);
-                            ctx.beginPath();
-                            ctx.ellipse(0, 0, segSize, segSize * 0.7, 0, 0, Math.PI * 2);
-                            ctx.fill();
-                            ctx.stroke();
+                            const ss = S * (0.9 - seg * 0.2), off = Math.sin(t * 2 + seg) * 5;
+                            ctx.save(); ctx.translate(0, off);
+                            ctx.beginPath(); ctx.ellipse(0, 0, ss, ss * 0.74, 0, 0, TAU); ctx.fillStyle = body(ss); ctx.fill(); rim(2);
                             ctx.restore();
                         }
-                        
-                        ctx.strokeStyle = '#e9f3f7';
-                        ctx.lineWidth = 3;
-                        for (let i = 0; i < 8; i++) {
-                            const angle = (Math.PI * 2 * i) / 8;
-                            ctx.beginPath();
-                            ctx.moveTo(0, 0);
-                            for (let t = 0; t < 1; t += 0.1) {
-                                const waveX = Math.cos(angle) * this.size * t + Math.sin(this.animationFrame * 3 + t * 5) * 10;
-                                const waveY = Math.sin(angle) * this.size * t + Math.cos(this.animationFrame * 3 + t * 5) * 10;
-                                ctx.lineTo(waveX, waveY);
-                            }
-                            ctx.stroke();
-                        }
-                        
-                        ctx.fillStyle = '#e9f3f7';
-                        for (let i = 0; i < 4; i++) {
-                            const angle = (Math.PI * 2 * i) / 4;
-                            const ex = Math.cos(angle) * this.size * 0.3;
-                            const ey = Math.sin(angle) * this.size * 0.3;
-                            ctx.beginPath();
-                            ctx.arc(ex, ey, 4, 0, Math.PI * 2);
-                            ctx.fill();
+                        ctx.strokeStyle = 'rgba(15,30,60,.5)'; ctx.lineWidth = 2;
+                        for (let i = -2; i <= 2; i++) { ctx.beginPath(); ctx.arc(0, 0, S * 0.9 - i * 0 + Math.abs(i) * 0, 0.2 + i * 0.25, 0.2 + i * 0.25 + 0.01); ctx.stroke(); }
+                        for (let i = 0; i < 4; i++) {   // glowing eyes that glance around
+                            const an = (TAU * i) / 4 + Math.PI / 4, ex = Math.cos(an) * S * 0.38, ey = Math.sin(an) * S * 0.38;
+                            ctx.save(); ctx.shadowColor = '#bfe6ff'; ctx.shadowBlur = 12;
+                            ctx.fillStyle = '#eaf6ff'; ctx.beginPath(); ctx.arc(ex, ey, 8, 0, TAU); ctx.fill(); ctx.restore();
+                            ctx.fillStyle = '#10264f'; ctx.beginPath(); ctx.arc(ex + Math.cos(t * 2 + i) * 2.5, ey + Math.sin(t * 2 + i) * 2.5, 3.5, 0, TAU); ctx.fill();
                         }
                         break;
-                        
-                    case 4: // Wave 50 - Geometric Matrix
-                        ctx.rotate(this.animationFrame);
-                        ctx.strokeStyle = '#e9f3f7';
-                        ctx.lineWidth = 2;
-                        
+                    }
+                    case 4: { // Wave 50 - Hyper Matrix
+                        ctx.save(); ctx.shadowColor = '#8fd0ff'; ctx.shadowBlur = 12;
                         for (let i = 0; i < 5; i++) {
-                            const size = this.size * (1 - i * 0.15);
-                            ctx.save();
-                            ctx.rotate((this.animationFrame * (i + 1)) / 2);
-                            ctx.strokeRect(-size/2, -size/2, size, size);
+                            const sz = S * (1 - i * 0.16);
+                            ctx.save(); ctx.rotate((t * (i + 1) * (i % 2 ? -1 : 1)) / 2);
+                            ctx.strokeStyle = `rgba(${150 + i * 20}, ${200 + i * 10}, 255, ${0.95 - i * 0.12})`; ctx.lineWidth = 2.5;
+                            ctx.fillStyle = `rgba(30, 70, 140, ${0.12 + i * 0.04})`;
+                            ctx.fillRect(-sz / 2, -sz / 2, sz, sz); ctx.strokeRect(-sz / 2, -sz / 2, sz, sz);
                             ctx.restore();
                         }
-                        
-                        ctx.fillStyle = '#74a9d3';
-                        const orbDist = this.size * 0.7;
-                        for (let i = 0; i < 4; i++) {
-                            const angle = (Math.PI * 2 * i) / 4 + Math.PI / 4;
-                            const ox = Math.cos(angle) * orbDist;
-                            const oy = Math.sin(angle) * orbDist;
-                            ctx.beginPath();
-                            ctx.arc(ox, oy, 8, 0, Math.PI * 2);
-                            ctx.fill();
-                        }
-                        
-                        ctx.fillStyle = '#e9f3f7';
-                        ctx.fillRect(-this.size * 0.15, -this.size * 0.15, this.size * 0.3, this.size * 0.3);
+                        ctx.restore();
+                        const orbs = [];
+                        for (let i = 0; i < 4; i++) { const an = t * 1.5 + (TAU * i) / 4; orbs.push([Math.cos(an) * S * 0.78, Math.sin(an) * S * 0.78]); }
+                        ctx.strokeStyle = 'rgba(190,225,255,.45)'; ctx.lineWidth = 1.5; ctx.beginPath();
+                        orbs.forEach((o, i) => i ? ctx.lineTo(o[0], o[1]) : ctx.moveTo(o[0], o[1])); ctx.closePath(); ctx.stroke();
+                        orbs.forEach(o => {
+                            ctx.save(); ctx.shadowColor = '#bfe6ff'; ctx.shadowBlur = 14; ctx.fillStyle = '#e4f3ff';
+                            ctx.beginPath(); ctx.arc(o[0], o[1], 8, 0, TAU); ctx.fill(); ctx.restore();
+                        });
+                        ctx.save(); ctx.rotate(t); const cs = S * 0.3;
+                        ctx.fillStyle = body(cs); ctx.fillRect(-cs / 2, -cs / 2, cs, cs); ctx.strokeStyle = '#e4f3ff'; ctx.lineWidth = 2; ctx.strokeRect(-cs / 2, -cs / 2, cs, cs);
+                        ctx.restore();
+                        core(S * 0.16, '#9fd8ff');
                         break;
-                        
-                    case 5: // Wave 60 - Cosmic Destroyer
-                        ctx.fillStyle = this.color;
-                        ctx.strokeStyle = '#e9f3f7';
-                        ctx.lineWidth = 3;
-                        
-                        ctx.rotate(this.animationFrame * 0.3);
-                        ctx.beginPath();
-                        for (let i = 0; i < 16; i++) {
-                            const angle = (Math.PI * 2 * i) / 16;
-                            const radius = i % 2 === 0 ? this.size * 1.2 : this.size * 0.9;
-                            const x = Math.cos(angle) * radius;
-                            const y = Math.sin(angle) * radius;
-                            if (i === 0) ctx.moveTo(x, y);
-                            else ctx.lineTo(x, y);
+                    }
+                    case 5: { // Wave 60 - Cosmic Destroyer
+                        ctx.save(); ctx.strokeStyle = 'rgba(190,225,255,.35)'; ctx.lineWidth = 1.5;
+                        for (let i = 0; i < 8; i++) { const an = t * 0.2 + (TAU * i) / 8; ctx.beginPath(); ctx.moveTo(Math.cos(an) * S * 1.25, Math.sin(an) * S * 1.25); ctx.lineTo(Math.cos(an) * S * 1.7, Math.sin(an) * S * 1.7); ctx.stroke(); }
+                        ctx.restore();
+                        ctx.save(); ctx.rotate(t * 0.3);
+                        poly(16, S * 1.22, S * 0.92, 0); ctx.fillStyle = body(S * 1.2); ctx.fill(); rim(3);
+                        ctx.restore();
+                        ctx.save(); ctx.rotate(-t * 0.6);
+                        for (let i = 0; i < 8; i++) {   // armour plates
+                            ctx.save(); ctx.rotate((TAU * i) / 8); ctx.fillStyle = '#16305e';
+                            ctx.fillRect(S * 0.5, -9, S * 0.3, 18); ctx.strokeStyle = 'rgba(190,225,255,.8)'; ctx.lineWidth = 1.5; ctx.strokeRect(S * 0.5, -9, S * 0.3, 18);
+                            ctx.restore();
                         }
-                        ctx.closePath();
-                        ctx.fill();
-                        ctx.stroke();
-                        
-                        ctx.rotate(-this.animationFrame * 0.6);
-                        ctx.fillStyle = '#3673ba';
-                        ctx.beginPath();
-                        ctx.arc(0, 0, this.size * 0.6, 0, Math.PI * 2);
-                        ctx.fill();
-                        ctx.stroke();
-                        
-                        ctx.rotate(this.animationFrame);
-                        ctx.fillStyle = '#528fca';
-                        for (let i = 0; i < 8; i++) {
-                            const angle = (Math.PI * 2 * i) / 8;
-                            const x = Math.cos(angle) * this.size * 0.3;
-                            const y = Math.sin(angle) * this.size * 0.3;
-                            ctx.fillRect(x - 4, y - 4, 8, 8);
-                        }
-                        
-                        ctx.fillStyle = '#e9f3f7';
-                        ctx.beginPath();
-                        ctx.arc(0, 0, this.size * 0.15, 0, Math.PI * 2);
-                        ctx.fill();
-                        
-                        ctx.fillStyle = '#51a6d6';
-                        ctx.beginPath();
-                        ctx.arc(0, 0, this.size * 0.08, 0, Math.PI * 2);
-                        ctx.fill();
+                        ctx.restore();
+                        ctx.beginPath(); ctx.arc(0, 0, S * 0.62, 0, TAU); ctx.fillStyle = '#0d1a38'; ctx.fill(); rim(3);
+                        ctx.save(); ctx.rotate(t * 0.9); ctx.setLineDash([10, 9]); ctx.strokeStyle = 'rgba(160,215,255,.85)'; ctx.lineWidth = 3;
+                        ctx.beginPath(); ctx.arc(0, 0, S * 0.5, 0, TAU); ctx.stroke(); ctx.restore();
+                        lights(12, S * 0.4, 3, -t, '#e4f3ff');
+                        core(S * 0.3, '#a9dcff');
                         break;
+                    }
                 }
                 
                 ctx.restore();
@@ -3235,38 +2614,8 @@
                 // Draw based on type
                 if (this.isBoss) {
                     this.drawBoss();
-                } else if (this.type === 'small') {
-                    this.drawSmallEnemy();
-                } else if (this.type === 'medium') {
-                    this.drawMediumEnemy();
-                } else if (this.type === 'large') {
-                    this.drawLargeEnemy();
-                } else if (this.type === 'elite-small') {
-                    this.drawEliteSmallEnemy();
-                } else if (this.type === 'elite-medium') {
-                    this.drawEliteMediumEnemy();
-                } else if (this.type === 'elite-large') {
-                    this.drawEliteLargeEnemy();
-                } else if (this.type === 'advanced-small') {
-                    this.drawAdvancedSmallEnemy();
-                } else if (this.type === 'advanced-medium') {
-                    this.drawAdvancedMediumEnemy();
-                } else if (this.type === 'advanced-large') {
-                    this.drawAdvancedLargeEnemy();
-                } else if (this.type === 'shooter') {
-                    this.drawShooterEnemy();
-                } else if (this.type === 'burst') {
-                    this.drawBurstEnemy();
-                } else if (this.type === 'spiral') {
-                    this.drawSpiralEnemy();
-                } else if (this.type === 'rapid') {
-                    this.drawRapidEnemy();
-                } else if (this.type === 'splitter') {
-                    this.drawSplitterEnemy();
-                } else if (this.type === 'exploder') {
-                    this.drawExploderEnemy();
-                } else if (this.type === 'mini-bomber') {
-                    this.drawMiniBomberEnemy();
+                } else {
+                    this.drawThemed();
                 }
                 
                 // Health bar
@@ -3498,8 +2847,10 @@
             if (currentWave === 30 && !bladesUnlocked) {
                 bladesUnlocked = true;
                 bladesReady = true;
-                showWaveAnnouncement('ORBITAL BLADES UNLOCKED!\nPress R to activate');
+                showWaveAnnouncement('WAVE 30 UNLOCKED!\nBlades [R] + explosive rounds');
             }
+            
+            if (currentWave >= 30) explosiveUnlocked = true;
             
             // Unlock time stop at wave 50
             if (currentWave === 50 && !timeStopUnlocked) {
@@ -3511,6 +2862,7 @@
             // Spawn enemies gradually
             clearInterval(spawnTimer);
             const spawnInterval = spawnTimer = setInterval(() => {
+                if (gameState === 'paused') return;
                 if (enemiesSpawned < enemiesInWave) {
                     spawnEnemy();
                     enemiesSpawned++;
@@ -3620,11 +2972,7 @@
                     showVictory();
                 } else {
                     // Start next wave after delay
-                    nextWaveTimer = setTimeout(() => {
-                        if (gameState === 'playing') {
-                            startWave();
-                        }
-                    }, 3000);
+                    scheduleNextWave(3000);
                 }
             }
         }
@@ -3689,6 +3037,7 @@
                         if (!enemy.alive) {
                             enemies.splice(j, 1);
                         }
+                        if (proj.explosive) explodeBlast(proj.x, proj.y, enemy);
                         break;
                     }
                 }
@@ -3751,6 +3100,38 @@
             }
         }
         
+        // ==================== EXPLOSIVE ROUNDS ====================
+        function explodeBlast(x, y, skip) {
+            const R = 100, dmg = currentWave >= 40 ? 40 : 28;   // splash is ~2.7x a bullet; the direct hit still does normal damage
+            blastRings.push({ x, y, t: 0 });
+            createExplosion(x, y, '#ffb347', 22);
+            createExplosion(x, y, '#fff1c9', 8);
+            screenShake = Math.max(screenShake, 5);
+            AudioManager.playBlast();
+            for (let j = enemies.length - 1; j >= 0; j--) {
+                const e = enemies[j];
+                if (e === skip) continue;
+                if (Math.hypot(e.x - x, e.y - y) < R + e.size * 0.5) {
+                    e.takeDamage(godMode ? 999999 : dmg);
+                    if (!e.alive) enemies.splice(j, 1);
+                }
+            }
+            enemyProjectiles.forEach(p => { if (Math.hypot(p.x - x, p.y - y) < R * 0.6) p.alive = false; });
+        }
+        
+        function drawBlastRings() {
+            ctx.save();
+            blastRings.forEach(b => {
+                const k = b.t / 380, r = 20 + 80 * (1 - Math.pow(1 - k, 3)), a = Math.max(0, 1 - k);
+                const g = ctx.createRadialGradient(b.x, b.y, r * 0.2, b.x, b.y, r);
+                g.addColorStop(0, `rgba(255, 220, 150, ${a * 0.35})`); g.addColorStop(1, 'rgba(255, 150, 60, 0)');
+                ctx.fillStyle = g; ctx.beginPath(); ctx.arc(b.x, b.y, r, 0, Math.PI * 2); ctx.fill();
+                ctx.strokeStyle = `rgba(255, 200, 110, ${a})`; ctx.lineWidth = 3;
+                ctx.beginPath(); ctx.arc(b.x, b.y, r, 0, Math.PI * 2); ctx.stroke();
+            });
+            ctx.restore();
+        }
+        
         // ==================== NEW ABILITIES: BLADES + TIME STOP ====================
         function bladePositions() {
             const n = 6;
@@ -3768,7 +3149,7 @@
                 if (e.bladeCd <= 0) {
                     const hit = bl.find(b => Math.hypot(b.x - e.x, b.y - e.y) < e.size + 16);
                     if (hit) {   // exactly one bullet's worth of damage per hit
-                        e.takeDamage(currentWave >= 40 ? 15 : 10);
+                        e.takeDamage(currentWave >= 40 ? 18 : 12);   // a bit stronger than a bullet (10 / 15)
                         e.bladeCd = 120;
                         createExplosion(hit.x, hit.y, '#33ddff', 5);
                         if (!e.alive) enemies.splice(j, 1);
@@ -3841,6 +3222,9 @@
                         player.health = Math.min(player.maxHealth, player.health + healAmount);
                     }
                 }
+                
+                blastRings.forEach(b => b.t += deltaTime);
+                blastRings = blastRings.filter(b => b.t < 380);
                 
                 // Orbital blades
                 if (bladesLeft > 0) {
@@ -4036,6 +3420,7 @@
                 enemyProjectiles.forEach(proj => proj.draw());
                 enemies.forEach(enemy => enemy.draw());
                 player.draw();
+                drawBlastRings();
                 if (bladesLeft > 0) drawBlades();
                 if (timeStopLeft > 0) drawTimeStop();
                 
@@ -4144,6 +3529,14 @@
                 else if (ready) { st.textContent = 'READY!'; st.style.color = color; }
                 else { st.textContent = kills + ' kills'; st.style.color = '#74a9d3'; }
             };
+            const bd = document.getElementById('blastDisplay');
+            if (explosiveUnlocked) {
+                const n = 6 - (shotCounter % 6);
+                bd.style.display = 'block';
+                const st = document.getElementById('blastStatus');
+                st.textContent = n === 1 ? 'NEXT SHOT!' : n + ' shots';
+                st.style.color = n === 1 ? '#ffb347' : '#74a9d3';
+            } else bd.style.display = 'none';
             hudAbility('blades', bladesUnlocked, bladesLeft > 0, bladesReady, KILLS_FOR_BLADES - killsSinceLastBlades, 'ACTIVE ' + (bladesLeft / 1000).toFixed(1) + 's', '#33ddff');
             hudAbility('timeStop', timeStopUnlocked, timeStopLeft > 0, timeStopReady, KILLS_FOR_TIMESTOP - killsSinceLastTimeStop, 'FROZEN ' + (timeStopLeft / 1000).toFixed(1) + 's', '#ffe27a');
         }
@@ -4156,71 +3549,111 @@
             hz: m => 440 * Math.pow(2, (m - 69) / 12),
             
             tracks: [
-                {   // 1 - warm lo-fi
-                    name: 'MIDNIGHT LOFI', bpm: 72, fx: { pad: 1400, echo: 0.75, fb: 0.38, wet: 0.4 },
-                    bars: [
-                        { root: 45, pad: [57, 60, 64, 67, 71], mel: [[0.5, 76, 1.5], [2.5, 72, 0.75], [3.25, 74, 0.75]] },
-                        { root: 41, pad: [53, 57, 60, 64, 67], mel: [[0, 72, 1], [1.5, 69, 0.5], [2, 72, 1.5]] },
-                        { root: 48, pad: [55, 59, 62, 64, 67], mel: [[0.5, 76, 1], [2, 79, 1.5], [3.5, 76, 0.5]] },
-                        { root: 40, pad: [55, 59, 62, 64], mel: [[0, 74, 1], [1, 72, 0.5], [2, 71, 1.5]] },
-                        { root: 38, pad: [53, 57, 60, 64], mel: [[0.5, 72, 1], [2, 76, 0.5], [2.75, 74, 1.25]] },
-                        { root: 41, pad: [53, 57, 60, 64], mel: [[0, 72, 1.5], [2, 69, 1], [3.5, 72, 0.5]] },
-                        { root: 48, pad: [55, 59, 64, 67], mel: [[0.5, 79, 1], [2, 76, 1], [3, 74, 1]] },
-                        { root: 40, pad: [56, 59, 62, 64], mel: [[0, 76, 2], [2.5, 74, 0.5]] }
-                    ],
+                {   // 1 - LOFI: 16 bars (calm A, lifted B), electric-piano plucks, vinyl crackle, hall reverb, risers
+                    name: 'LOFI', bpm: 72, fx: { pad: 1400, echo: 0.75, fb: 0.38, wet: 0.38, verb: 0.4, gain: 1 },
+                    bars: (() => {
+                        const x = [
+                            { root: 45, pad: [57, 60, 64, 67, 71], mel: [[0.5, 76, 1.5], [2.5, 72, 0.75], [3.25, 74, 0.75]] },
+                            { root: 41, pad: [53, 57, 60, 64, 67], mel: [[0, 72, 1], [1.5, 69, 0.5], [2, 72, 1.5]] },
+                            { root: 48, pad: [55, 59, 62, 64, 67], mel: [[0.5, 76, 1], [2, 79, 1.5], [3.5, 76, 0.5]] },
+                            { root: 40, pad: [55, 59, 62, 64], mel: [[0, 74, 1], [1, 72, 0.5], [2, 71, 1.5]] },
+                            { root: 38, pad: [53, 57, 60, 64], mel: [[0.5, 72, 1], [2, 76, 0.5], [2.75, 74, 1.25]] },
+                            { root: 41, pad: [53, 57, 60, 64], mel: [[0, 72, 1.5], [2, 69, 1], [3.5, 72, 0.5]] },
+                            { root: 48, pad: [55, 59, 64, 67], mel: [[0.5, 79, 1], [2, 76, 1], [3, 74, 1]] },
+                            { root: 40, pad: [56, 59, 62, 64], mel: [[0, 76, 2], [2.5, 74, 0.5]] },
+                            { root: 41, pad: [53, 57, 60, 64, 67], mel: [[0, 81, 1], [1.5, 79, 0.5], [2, 77, 1.5]] },
+                            { root: 40, pad: [55, 59, 62, 64], mel: [[0.5, 76, 1], [2, 74, 1], [3, 72, 1]] },
+                            { root: 38, pad: [53, 57, 60, 64], mel: [[0, 77, 1.5], [2, 76, 0.5], [2.75, 74, 1.25]] },
+                            { root: 45, pad: [57, 60, 64, 67, 71], mel: [[0.5, 72, 1], [2, 76, 2]] },
+                            { root: 41, pad: [53, 57, 60, 64, 67], mel: [[0, 84, 1.5], [2, 81, 1], [3, 79, 1]] },
+                            { root: 40, pad: [55, 59, 62, 64], mel: [[0, 79, 1], [1.5, 76, 0.5], [2, 74, 2]] },
+                            { root: 38, pad: [53, 57, 60, 64], mel: [[0.5, 77, 1], [2, 74, 1], [3, 72, 1]] },
+                            { root: 40, pad: [56, 59, 62, 64], mel: [[0, 76, 1], [1, 80, 1], [2, 83, 2]] }
+                        ];
+                        return x.map((o, i) => Object.assign(o, { sec: i < 8 ? 0 : 1, idx: i, fill: i === 7 || i === 15 }));
+                    })(),
                     play(M, c, t0) {
-                        const beat = 60 / this.bpm, f = M.hz;
+                        const ctx = AudioManager.context, b = 60 / this.bpm, f = M.hz, hot = c.sec === 1;
+                        // pad with a gentle sidechain-style breathing on kicks
+                        const pg = ctx.createGain(); pg.connect(M.padFilter); if (M.verbIn) pg.connect(M.verbIn);
+                        pg.gain.setValueAtTime(1, t0);
+                        [0, 2].forEach(k => { const t = t0 + b * k; pg.gain.setValueAtTime(0.55, t); pg.gain.linearRampToValueAtTime(1, t + b * 0.9); });
                         c.pad.forEach(m => {
-                            M.tone('triangle', f(m), t0, beat * 4 + 0.8, 0.032, M.padFilter, 1.1, 1.3, -6);
-                            M.tone('triangle', f(m), t0, beat * 4 + 0.8, 0.032, M.padFilter, 1.1, 1.3, 6);
+                            M.tone('triangle', f(m), t0, b * 4 + 0.8, 0.032, pg, 1.1, 1.3, -6);
+                            M.tone('triangle', f(m), t0, b * 4 + 0.8, 0.032, pg, 1.1, 1.3, 6);
                         });
-                        M.tone('sine', f(c.root), t0, beat * 1.5, 0.24, M.bus, 0.03, 0.35);
-                        M.tone('sine', f(c.root), t0 + beat * 2.5, beat, 0.18, M.bus, 0.03, 0.35);
-                        [0, 2].forEach(b => M.kick(t0 + beat * b, 0.28));
-                        [1, 3].forEach(b => M.hit(t0 + beat * b, 'bandpass', 1900, 0.07, 0.14));
+                        if (hot) c.pad.slice(0, 3).forEach(m => M.tone('sine', f(m + 12), t0, b * 4 + 0.8, 0.014, pg, 1.2, 1.3));
+                        // bass
+                        M.tone('sine', f(c.root), t0, b * 1.5, 0.24, M.bus, 0.03, 0.35);
+                        M.tone('sine', f(c.root), t0 + b * 2.5, b, 0.18, M.bus, 0.03, 0.35);
+                        if (hot) M.tone('triangle', f(c.root + 12), t0 + b * 3.5, b * 0.45, 0.05, M.bus, 0.02, 0.2);
+                        // drums: soft kick (+ghost kick in B), snare into the reverb, swung hats (16th ghosts in B)
+                        [0, 2].forEach(k => M.kick(t0 + b * k, 0.28));
+                        if (hot) M.kick(t0 + b * 2.75, 0.1);
+                        [1, 3].forEach(k => M.hit(t0 + b * k, 'bandpass', 1900, 0.07, 0.14, 0.5));
                         for (let i = 0; i < 8; i++) {
-                            const swing = i % 2 ? beat * 0.07 : 0;
-                            M.hit(t0 + beat * 0.5 * i + swing, 'highpass', 7500, i % 2 ? 0.05 : 0.03, 0.05);
+                            const sw = i % 2 ? b * 0.07 : 0;
+                            M.hit(t0 + b * 0.5 * i + sw, 'highpass', 7500, i % 2 ? 0.05 : 0.03, 0.05);
+                            if (hot && i % 2) M.hit(t0 + b * 0.5 * i + sw - b * 0.25, 'highpass', 9000, 0.015, 0.03);
                         }
-                        c.mel.forEach(([b, m, d]) => {
-                            M.note('triangle', f(m), t0 + beat * b, beat * d, 0.075, 0.9);
-                            M.note('sine', f(m + 12), t0 + beat * b, beat * d * 0.6, 0.015, 0.6);
+                        for (let i = 0; i < 8; i++) M.hit(t0 + Math.random() * b * 4, 'highpass', 3500, 0.012 + Math.random() * 0.01, 0.012);   // vinyl crackle
+                        // electric-piano plucks, panned
+                        (hot ? [0, 1, 2, 3, 0.5, 2.5] : [0, 1.5, 3]).forEach((k, i) => M.note('sine', f(c.pad[i % c.pad.length] + 12), t0 + b * k, b * 0.9, 0.028, 0.8, i % 2 ? 0.3 : -0.3));
+                        // melody
+                        c.mel.forEach(([k, m, d]) => {
+                            M.note('triangle', f(m), t0 + b * k, b * d, 0.075, 0.9, 0.12);
+                            M.note('sine', f(m + 12), t0 + b * k, b * d * 0.6, 0.015, 0.6, 0.12);
                         });
+                        if (c.fill) M.sweep(t0, b * 4, 0.06);
                     }
                 },
-                {   // 2 - low, smoky late-night jazz (swung, walking bass, brushed ride, mellow Rhodes)
-                    name: 'SMOKY JAZZ', bpm: 76, fx: { pad: 2200, echo: 0.667, fb: 0.22, wet: 0.22 },
-                    bars: [   // Dm9 | G13 | Cmaj9 | Am7 | Dm9 | G13 | Cmaj9 | A7  -> back to Dm9
-                        { walk: [38, 41, 45, 44], pad: [50, 53, 57, 60, 64], mel: [[0.5, 69, 1.5], [2.667, 72, 1]] },
-                        { walk: [43, 47, 50, 47], pad: [53, 59, 62, 64], mel: [[0, 71, 1], [1.667, 69, 0.5], [2, 67, 1.5]] },
-                        { walk: [48, 52, 55, 46], pad: [52, 55, 59, 62], mel: [[0.5, 67, 1], [2, 64, 1], [3, 67, 1]] },
-                        { walk: [45, 52, 48, 39], pad: [52, 55, 59, 60], mel: [[0, 64, 1.5], [2.667, 62, 1.2]] },
-                        { walk: [38, 45, 41, 44], pad: [50, 53, 57, 60, 64], mel: [[0.5, 65, 1], [1.667, 69, 0.8], [2.667, 72, 1.2]] },
-                        { walk: [43, 47, 50, 47], pad: [53, 59, 62, 64], mel: [[0, 71, 1.5], [2.667, 67, 1.2]] },
-                        { walk: [48, 52, 55, 46], pad: [52, 55, 59, 62], mel: [[0.5, 76, 1], [2, 74, 1], [3, 72, 1]] },
-                        { walk: [45, 49, 52, 39], pad: [52, 55, 59, 61], mel: [[0, 69, 1], [1.667, 73, 0.8], [2.667, 71, 1]] }
-                    ],
+                {   // 2 - JAZZ: 16 bars, low smoky late-night (swung ride, walking bass, Rhodes), B section solos with more comping
+                    name: 'JAZZ', bpm: 76, fx: { pad: 2200, echo: 0.667, fb: 0.22, wet: 0.2, verb: 0.45, gain: 1 },
+                    bars: (() => {   // A: Dm9 G13 Cmaj9 Am7 Dm9 G13 Cmaj9 A7   |   B: Fmaj9 Em7 A7 Dm9 G13 Cmaj9 A7 A7
+                        const x = [
+                            { walk: [38, 41, 45, 44], pad: [50, 53, 57, 60, 64], mel: [[0.5, 69, 1.5], [2.667, 72, 1]] },
+                            { walk: [43, 47, 50, 47], pad: [53, 59, 62, 64], mel: [[0, 71, 1], [1.667, 69, 0.5], [2, 67, 1.5]] },
+                            { walk: [48, 52, 55, 46], pad: [52, 55, 59, 62], mel: [[0.5, 67, 1], [2, 64, 1], [3, 67, 1]] },
+                            { walk: [45, 52, 48, 39], pad: [52, 55, 59, 60], mel: [[0, 64, 1.5], [2.667, 62, 1.2]] },
+                            { walk: [38, 45, 41, 44], pad: [50, 53, 57, 60, 64], mel: [[0.5, 65, 1], [1.667, 69, 0.8], [2.667, 72, 1.2]] },
+                            { walk: [43, 47, 50, 47], pad: [53, 59, 62, 64], mel: [[0, 71, 1.5], [2.667, 67, 1.2]] },
+                            { walk: [48, 52, 55, 46], pad: [52, 55, 59, 62], mel: [[0.5, 76, 1], [2, 74, 1], [3, 72, 1]] },
+                            { walk: [45, 49, 52, 39], pad: [52, 55, 59, 61], mel: [[0, 69, 1], [1.667, 73, 0.8], [2.667, 71, 1]] },
+                            { walk: [41, 48, 45, 41], pad: [53, 57, 60, 64, 67], mel: [[0, 77, 1], [1.667, 76, 0.5], [2, 72, 1.5]] },
+                            { walk: [40, 43, 47, 46], pad: [55, 59, 62, 64], mel: [[0.5, 74, 1], [2, 71, 1], [3, 67, 1]] },
+                            { walk: [45, 52, 49, 39], pad: [52, 55, 61, 64], mel: [[0, 73, 1.5], [2, 69, 1], [3.667, 67, 0.3]] },
+                            { walk: [38, 41, 45, 44], pad: [50, 53, 57, 60, 64], mel: [[0.5, 69, 1], [1.667, 72, 0.8], [2.667, 74, 1.2]] },
+                            { walk: [43, 47, 50, 47], pad: [53, 59, 62, 64], mel: [[0, 71, 1], [1, 74, 1], [2, 79, 2]] },
+                            { walk: [48, 52, 55, 46], pad: [52, 55, 59, 62], mel: [[0.5, 76, 1], [2, 72, 1], [3, 76, 1]] },
+                            { walk: [45, 49, 52, 50], pad: [52, 55, 61, 64], mel: [[0, 73, 1], [1.667, 76, 0.8], [2.667, 69, 1.2]] },
+                            { walk: [45, 52, 49, 39], pad: [52, 55, 61, 64], mel: [[0, 69, 2], [2.667, 67, 1]] }
+                        ];
+                        return x.map((o, i) => Object.assign(o, { sec: i < 8 ? 0 : 1, idx: i }));
+                    })(),
                     play(M, c, t0) {
-                        const b = 60 / this.bpm, f = M.hz;
-                        c.pad.forEach(m => [[0, 1.8, 0.04], [2.667, 0.8, 0.03]].forEach(([pos, d, v]) => {   // Rhodes-ish comping
-                            M.tone('sine', f(m), t0 + b * pos, b * d, v, M.padFilter, 0.015, 0.9);
+                        const b = 60 / this.bpm, f = M.hz, hot = c.sec === 1;
+                        const comp = hot ? [[0, 1.8, 0.04], [1.667, 0.6, 0.025], [2.667, 0.8, 0.03]] : [[0, 1.8, 0.04], [2.667, 0.8, 0.03]];
+                        c.pad.forEach((m, n) => comp.forEach(([pos, d, v]) => {   // Rhodes-ish comping, spread across the stereo field
+                            M.note('sine', f(m), t0 + b * pos, b * d, v * 0.8, 0.9, (n % 2 ? 1 : -1) * 0.22);
                             M.tone('triangle', f(m + 12), t0 + b * pos, b * d * 0.5, v * 0.2, M.padFilter, 0.015, 0.5);
                         }));
                         c.walk.forEach((m, i) => {   // walking bass
                             M.tone('triangle', f(m), t0 + b * i, b * 0.9, 0.17, M.bus, 0.02, 0.18);
                             M.tone('sine', f(m), t0 + b * i, b * 0.9, 0.13, M.bus, 0.02, 0.18);
                         });
-                        [0, 1, 1.667, 2, 3, 3.667].forEach((p, i) => M.hit(t0 + b * p, 'highpass', 6500, i % 3 === 2 ? 0.02 : 0.035, 0.18)); // swung ride
-                        [1, 3].forEach(p => M.hit(t0 + b * p, 'bandpass', 3000, 0.04, 0.07));              // hi-hat foot
-                        [0, 1, 2, 3].forEach(p => M.kick(t0 + b * p, 0.07));                                 // feathered kick
+                        [0, 1, 1.667, 2, 3, 3.667].forEach((p, i) => M.hit(t0 + b * p, 'highpass', 6500, i % 3 === 2 ? 0.02 : 0.035, 0.18, 0.25));   // swung ride
+                        [1, 3].forEach(p => M.hit(t0 + b * p, 'bandpass', 3000, 0.04, 0.07));                     // hi-hat foot
+                        [1, 3].forEach(p => M.hit(t0 + b * (p + 0.9), 'bandpass', 2200, 0.03, 0.3, 0.4));        // brush swish into the room
+                        [0, 1, 2, 3].forEach(p => M.kick(t0 + b * p, 0.07));                                       // feathered kick
                         c.mel.forEach(([p, m, d]) => {
-                            M.note('sine', f(m), t0 + b * p, b * d, 0.06, 0.7);
-                            M.note('triangle', f(m), t0 + b * p, b * d, 0.012, 0.7);
+                            M.note('sine', f(m), t0 + b * p, b * d, 0.06, 0.7, 0.1);
+                            M.note('triangle', f(m), t0 + b * p, b * d, 0.012, 0.7, 0.1);
+                            if (hot) M.note('sine', f(m - 12), t0 + b * p, b * d, 0.02, 0.7, -0.1);   // octave-down double in B
                         });
                     }
                 },
                 {   // 3 - dreamy ambient "stellar drift" (no drums, slow swells, shimmering bells)
-                    name: 'STELLAR DRIFT', bpm: 60, fx: { pad: 1100, echo: 0.75, fb: 0.55, wet: 0.55 },
+                    name: 'STELLAR', bpm: 60, fx: { pad: 1100, echo: 0.75, fb: 0.55, wet: 0.55 },
                     bars: [   // Dmaj7 | Bm7 | Gmaj7 | Asus2 | Dmaj7 | F#m7 | Gmaj7 | A6/9
                         { root: 38, pad: [62, 66, 69, 73] }, { root: 35, pad: [59, 62, 66, 69] },
                         { root: 43, pad: [55, 59, 62, 66] }, { root: 45, pad: [57, 59, 64, 69] },
@@ -4238,6 +3671,62 @@
                         [0, 2, 1, 3, 2, 3, 1, 2].forEach((pi, i) =>   // shimmering bell arpeggio into the echo
                             M.note('sine', f(c.pad[pi % c.pad.length] + 12), t0 + b * 0.5 * i, b * 0.5, 0.035, 1.6));
                     }
+                },
+                {   // 4 - SYNC: 16-bar chillwave / synthwave. Sidechain-pumped supersaw pad, plucky bass, stereo arps, hall reverb,
+                    // two sections (calm A, lifted B with lead melody), and risers into each section change.
+                    name: 'SYNC', bpm: 90, fx: { pad: 2000, echo: 0.75, fb: 0.4, wet: 0.3, verb: 0.5, gain: 0.85 },
+                    bars: (() => {
+                        const ch = [
+                            [45, [57, 60, 64, 67, 71]], [41, [53, 57, 60, 64, 67]], [48, [55, 59, 62, 64, 67]], [43, [55, 59, 62, 64, 69]],
+                            [45, [57, 60, 64, 67, 71]], [41, [53, 57, 60, 64, 67]], [38, [53, 57, 60, 64]], [40, [56, 59, 62, 64]],
+                            [41, [53, 57, 60, 64, 67]], [43, [55, 59, 62, 64]], [40, [55, 59, 62, 64]], [45, [57, 60, 64, 67, 71]],
+                            [41, [53, 57, 60, 64, 67]], [43, [55, 59, 62, 64]], [38, [53, 57, 60, 64]], [40, [56, 59, 62, 64]]
+                        ];
+                        const mel = [
+                            [], [], [], [],
+                            [[0, 76, 2], [2.5, 74, 1]], [[0, 72, 1.5], [2, 77, 1], [3, 76, 1]], [[0, 74, 2], [2.5, 72, 1.5]], [[0, 71, 1], [1, 74, 1], [2, 76, 2]],
+                            [[0, 81, 1.5], [1.5, 79, 0.5], [2, 77, 1], [3, 76, 1]], [[0, 74, 1], [1, 76, 1], [2, 79, 2]],
+                            [[0, 76, 1.5], [1.5, 74, 0.5], [2, 71, 2]], [[0, 72, 1], [1, 76, 1], [2, 81, 1.5], [3.5, 79, 0.5]],
+                            [[0, 84, 1.5], [1.5, 81, 0.5], [2, 79, 1], [3, 77, 1]], [[0, 79, 1], [1, 76, 1], [2, 74, 1], [3, 76, 1]],
+                            [[0, 77, 1.5], [1.5, 76, 0.5], [2, 74, 2]], [[0, 76, 1], [1, 80, 1], [2, 83, 1.5], [3.5, 81, 0.5]]
+                        ];
+                        return ch.map((x, i) => ({ root: x[0], pad: x[1], mel: mel[i], sec: i < 8 ? 0 : 1, idx: i, fill: i === 7 || i === 15 }));
+                    })(),
+                    play(M, c, t0) {
+                        const ctx = AudioManager.context, b = 60 / this.bpm, f = M.hz, hot = c.sec === 1;
+                        // supersaw pad, ducked on every beat (sidechain pump)
+                        const pg = ctx.createGain();
+                        pg.connect(M.padFilter); if (M.verbIn) pg.connect(M.verbIn);
+                        pg.gain.setValueAtTime(1, t0);
+                        for (let k = 0; k < 4; k++) { const t = t0 + b * k; pg.gain.setValueAtTime(0.28, t); pg.gain.linearRampToValueAtTime(1, t + b * 0.85); }
+                        c.pad.forEach(m => [-9, 0, 9].forEach(d => M.tone('sawtooth', f(m), t0, b * 4 + 0.6, 0.011, pg, 0.35, 0.9, d)));
+                        // drums
+                        for (let k = 0; k < 4; k++) M.kick(t0 + b * k, 0.34);
+                        [1, 3].forEach(k => { [0, 0.011, 0.022].forEach(o => M.hit(t0 + b * k + o, 'bandpass', 1700, 0.045, 0.13)); M.hit(t0 + b * k, 'highpass', 3500, 0.03, 0.2); });
+                        [0.5, 1.5, 2.5, 3.5].forEach((k, i) => M.hit(t0 + b * k, 'highpass', 8500, 0.045, i === 3 ? 0.22 : 0.06));
+                        if (hot) for (let k = 0; k < 4; k++) M.hit(t0 + b * (k + 0.25), 'highpass', 9500, 0.02, 0.04);
+                        if (c.fill) {
+                            [3, 3.25, 3.5, 3.75].forEach((k, i) => M.hit(t0 + b * k, 'bandpass', 2500, 0.04 + i * 0.02, 0.09));
+                            M.sweep(t0, b * 4, 0.1);
+                        }
+                        // bass
+                        [[0, 0, 0.7], [0.75, 0, 0.45], [1.5, 12, 0.4], [2.5, 0, 0.45], [3, 0, 0.45], [3.5, 12, 0.4]].forEach(([p, oct, d]) => {
+                            M.synthBass(c.root + oct, t0 + b * p, b * d);
+                            if (!oct) M.tone('sine', f(c.root), t0 + b * p, b * d, 0.16, M.bus, 0.01, 0.12);
+                        });
+                        // 16th-note arp, panned left/right into the echo
+                        const seq = [0, 2, 1, 3, 2, 4, 3, 2, 1, 3, 2, 4, 3, 2, 1, 0];
+                        for (let i = 0; i < 16; i++) {
+                            if (!hot && c.idx < 4 && i % 2) continue;   // sparser intro
+                            M.note('triangle', f(c.pad[seq[i] % c.pad.length] + 12), t0 + b * 0.25 * i, b * 0.22, hot ? 0.045 : 0.032, 0.25, i % 2 ? 0.45 : -0.45);
+                        }
+                        // lead
+                        c.mel.forEach(([p, m, d]) => {
+                            const t = t0 + b * p;
+                            [-7, 7].forEach(dt => M.tone('sawtooth', f(m), t, b * d, 0.02, M.leadIn, 0.04, 0.9, dt));
+                            M.tone('sine', f(m), t, b * d, 0.05, M.leadIn, 0.04, 0.9);
+                        });
+                    }
                 }
             ],
             
@@ -4246,8 +3735,8 @@
                 const ctx = AudioManager.context, tr = this.tracks[this.idx], beat = 60 / tr.bpm;
                 this.comp = ctx.createDynamicsCompressor();
                 this.bus = ctx.createGain();
-                this.bus.gain.value = fade ? 0 : this.vol * 0.6;
-                if (fade) this.bus.gain.setTargetAtTime(this.vol * 0.6, ctx.currentTime + 0.3, 0.4);
+                this.bus.gain.value = fade ? 0 : this.vol * 0.6 * (tr.fx.gain || 1);
+                if (fade) this.bus.gain.setTargetAtTime(this.vol * 0.6 * (tr.fx.gain || 1), ctx.currentTime + 0.3, 0.4);
                 this.bus.connect(this.comp); this.comp.connect(ctx.destination);
                 this.padFilter = ctx.createBiquadFilter();
                 this.padFilter.type = 'lowpass'; this.padFilter.frequency.value = tr.fx.pad;
@@ -4258,6 +3747,19 @@
                 const dl = ctx.createBiquadFilter(); dl.type = 'lowpass'; dl.frequency.value = 1800;
                 const wet = ctx.createGain(); wet.gain.value = tr.fx.wet;
                 this.send.connect(delay); delay.connect(dl); dl.connect(fb); fb.connect(delay); dl.connect(wet); wet.connect(this.bus);
+                // optional hall reverb (generated impulse) + a filtered lead input, used by the SYNC track
+                this.verbIn = null;
+                if (tr.fx.verb) {
+                    const len = Math.floor(ctx.sampleRate * 2.4), imp = ctx.createBuffer(2, len, ctx.sampleRate);
+                    for (let ch = 0; ch < 2; ch++) { const d = imp.getChannelData(ch); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.6); }
+                    const conv = ctx.createConvolver(); conv.buffer = imp;
+                    const vw = ctx.createGain(); vw.gain.value = tr.fx.verb;
+                    this.verbIn = ctx.createGain(); this.verbIn.connect(conv); conv.connect(vw); vw.connect(this.bus);
+                }
+                this.leadFilter = ctx.createBiquadFilter(); this.leadFilter.type = 'lowpass'; this.leadFilter.frequency.value = 2600;
+                this.leadIn = ctx.createGain(); this.leadIn.connect(this.leadFilter);
+                this.leadFilter.connect(this.bus); this.leadFilter.connect(this.send);
+                if (this.verbIn) this.leadFilter.connect(this.verbIn);
             },
             
             start() {
@@ -4295,7 +3797,7 @@
                 }
             },
             
-            tone(type, freq, t, dur, vol, dest, attack, rel, detune) {
+            tone(type, freq, t, dur, vol, dest, attack, rel, detune, pan) {
                 const ctx = AudioManager.context, o = ctx.createOscillator(), g = ctx.createGain();
                 o.type = type; o.frequency.value = freq; if (detune) o.detune.value = detune;
                 const hold = t + Math.max(dur, attack);
@@ -4303,21 +3805,23 @@
                 g.gain.linearRampToValueAtTime(vol, t + attack);
                 g.gain.setValueAtTime(vol, hold);
                 g.gain.setTargetAtTime(0, hold, rel / 3);
-                o.connect(g); g.connect(dest);
+                o.connect(g);
+                if (pan) { const pn = ctx.createStereoPanner(); pn.pan.value = pan; g.connect(pn); pn.connect(dest); } else g.connect(dest);
                 o.start(t); o.stop(hold + rel + 0.1);
             },
             
-            note(type, freq, t, dur, vol, rel) {   // melodic voice that also feeds the echo
+            note(type, freq, t, dur, vol, rel, pan) {   // melodic voice that also feeds the echo
                 const dest = AudioManager.context.createGain();
-                dest.connect(this.bus); dest.connect(this.send);
-                this.tone(type, freq, t, dur, vol, dest, 0.012, rel);
+                dest.connect(this.bus); dest.connect(this.send); if (this.verbIn) dest.connect(this.verbIn);
+                this.tone(type, freq, t, dur, vol, dest, 0.012, rel, 0, pan);
             },
             
-            hit(t, type, freq, vol, dur) {
+            hit(t, type, freq, vol, dur, rv) {
                 const ctx = AudioManager.context, src = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
                 src.buffer = this.noise; src.loop = true; f.type = type; f.frequency.value = freq;
                 g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
                 src.connect(f); f.connect(g); g.connect(this.bus);
+                if (rv && this.verbIn) { const vg = ctx.createGain(); vg.gain.value = rv; g.connect(vg); vg.connect(this.verbIn); }
                 src.start(t, Math.random() * 0.5); src.stop(t + dur + 0.02);
             },
             
@@ -4328,9 +3832,27 @@
                 o.connect(g); g.connect(this.bus); o.start(t); o.stop(t + 0.25);
             },
             
+            synthBass(m, t, dur) {   // plucky filtered saw bass
+                const ctx = AudioManager.context, o = ctx.createOscillator(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+                o.type = 'sawtooth'; o.frequency.value = this.hz(m);
+                f.type = 'lowpass'; f.Q.value = 5;
+                f.frequency.setValueAtTime(1500, t); f.frequency.exponentialRampToValueAtTime(230, t + Math.max(dur, 0.1));
+                g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.15, t + 0.012); g.gain.setTargetAtTime(0, t + dur * 0.8, 0.05);
+                o.connect(f); f.connect(g); g.connect(this.bus); o.start(t); o.stop(t + dur + 0.4);
+            },
+            
+            sweep(t, dur, vol) {   // noise riser into the next section
+                const ctx = AudioManager.context, src = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+                src.buffer = this.noise; src.loop = true; f.type = 'bandpass'; f.Q.value = 1.5;
+                f.frequency.setValueAtTime(300, t); f.frequency.exponentialRampToValueAtTime(9000, t + dur);
+                g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + dur * 0.95); g.gain.linearRampToValueAtTime(0, t + dur);
+                src.connect(f); f.connect(g); g.connect(this.bus); if (this.verbIn) g.connect(this.verbIn);
+                src.start(t); src.stop(t + dur + 0.02);
+            },
+            
             setVolume(v) {
                 this.vol = v;
-                if (this.bus) this.bus.gain.setTargetAtTime(v * 0.6, AudioManager.context.currentTime, 0.05);
+                if (this.bus) this.bus.gain.setTargetAtTime(v * 0.6 * (this.tracks[this.idx].fx.gain || 1), AudioManager.context.currentTime, 0.05);
             }
         };
         
@@ -4338,7 +3860,7 @@
         const Settings = { sound: 0.5, music: 0.5, track: 0 };
         try {
             const sv = JSON.parse(localStorage.getItem('cosmicSettings') || 'null');
-            if (sv && isFinite(sv.sound) && isFinite(sv.music)) { Settings.sound = +sv.sound; Settings.music = +sv.music; if ([0, 1, 2].includes(+sv.track)) Settings.track = +sv.track; }
+            if (sv && isFinite(sv.sound) && isFinite(sv.music)) { Settings.sound = +sv.sound; Settings.music = +sv.music; if ([0, 1, 2, 3].includes(+sv.track)) Settings.track = +sv.track; }
         } catch (e) {}
         
         function applySettings() {
@@ -4427,6 +3949,7 @@
             // Reset orbital blades + time stop
             bladesUnlocked = false; bladesReady = true; bladesLeft = 0; killsSinceLastBlades = 0;
             timeStopUnlocked = false; timeStopReady = true; timeStopLeft = 0; killsSinceLastTimeStop = 0;
+            explosiveUnlocked = false; shotCounter = 0; blastRings = [];
             
             // Show HUD
             document.getElementById('hud').classList.remove('hidden');
